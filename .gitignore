@@ -12,4 +12,3 @@ build/
 .DS_Store
 uv.lock.bak
 agent-tools/
-.nse_alert/
