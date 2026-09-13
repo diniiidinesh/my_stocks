@@ -1,0 +1,28 @@
+[project]
+name = "nse-alert"
+version = "0.1.0"
+description = "Realtime NSE ±% day-move alerts via Kite Connect WebSocket and Telegram"
+readme = "README.md"
+authors = [
+    { name = "Cursor Agent", email = "cursoragent@cursor.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.5.0",
+    "httpx>=0.28.1",
+    "kiteconnect>=5.2.1",
+    "pandas>=3.0.5",
+    "pydantic-settings>=2.15.0",
+]
+
+[project.scripts]
+nse-alert = "nse_alert.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

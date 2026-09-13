@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+.nse_alert/
+*.egg-info/
+dist/
+build/
+.DS_Store
+uv.lock.bak
+agent-tools/
+.nse_alert/
