@@ -1,6 +1,6 @@
 # NSE Alert
 
-Realtime watcher for **NSE cash stocks** that move **±13%** (configurable) from the previous close. Streams LTP via **Zerodha Kite Connect** WebSocket and notifies you on **Telegram** (with console fallback).
+Realtime watcher for **NSE cash stocks** that move a configurable **±%** from the previous close (e.g. **4%, 7%, and 11%**). Streams LTP via **Zerodha Kite Connect** WebSocket and notifies you on **Telegram** (with console fallback).
 
 ## What it watches
 
@@ -19,8 +19,8 @@ Override with `CUSTOM_UNIVERSE_FILE` (one ticker per line) if you want a fixed l
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
-# Demo: synthetic ticks until DEMO13 crosses ±13%
-uv run nse-alert watch --feed mock --threshold 13
+# Demo: synthetic ticks; DEMO13 crosses each level
+uv run nse-alert watch --feed mock --threshold 4,7,11
 
 # List the mock universe
 uv run nse-alert universe
@@ -45,11 +45,18 @@ cp .env.example .env
    - Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.  
    - If unset, alerts still print to the terminal.
 
-4. Run during market hours:
+4. Set alert levels in `.env` (comma-separated):
+
+```env
+THRESHOLD_PCT=4,7,11
+```
+
+5. Run during market hours:
 
 ```bash
 # .env: FEED_MODE=kite
-uv run nse-alert watch --threshold 13
+uv run nse-alert watch
+# or override: uv run nse-alert watch --threshold 4,7,11
 ```
 
 ## Costs (approx. INR)
@@ -69,7 +76,7 @@ WhatsApp is feasible later via official Cloud API / a BSP, but it adds per-messa
 ## CLI
 
 ```text
-nse-alert watch [--threshold 13] [--feed mock|kite] [--max-ticks N]
+nse-alert watch [--threshold 4,7,11] [--feed mock|kite] [--max-ticks N]
 nse-alert universe [--min-turnover-cr 25] [--min-price 20]
 nse-alert login-hint
 ```
@@ -77,8 +84,9 @@ nse-alert login-hint
 ## How alerts work
 
 - Day change: `(LTP / previous_close - 1) * 100`
-- Fires when `|change| >= threshold` (default **13**)
-- **Once per symbol per calendar day** (state in `.nse_alert/fired.json`)
+- Fires when `|change|` crosses each configured level (default **13**, or e.g. **4, 7, 11**)
+- **Once per symbol / direction / threshold per calendar day** (state in `.nse_alert/fired.json`)
+- A jump that skips levels (e.g. +3% → +12%) still fires each newly crossed level in order
 
 ## Project layout
 
@@ -96,4 +104,4 @@ src/nse_alert/
 
 - Kite `access_token` must be refreshed **daily**.
 - Live data needs the **paid** Connect plan; Personal (free) WebSockets return 403 for market data.
-- ±13% on liquid names is uncommon — tune `--threshold` or `MIN_TURNOVER_CR` if needed.
+- Large moves on liquid names are uncommon — tune `--threshold` / `THRESHOLD_PCT` or `MIN_TURNOVER_CR` if needed.

@@ -16,8 +16,9 @@ class ConsoleNotifier:
     def send(self, alert: Alert) -> None:
         print(
             f"[ALERT] {alert.direction} {alert.symbol} "
-            f"{alert.change_pct:+.2f}% LTP={alert.ltp:.2f} "
-            f"prev={alert.prev_close:.2f} @ {alert.fired_at.isoformat()}",
+            f"{alert.change_pct:+.2f}% (crossed ±{alert.threshold_pct:g}%) "
+            f"LTP={alert.ltp:.2f} prev={alert.prev_close:.2f} "
+            f"@ {alert.fired_at.isoformat()}",
             flush=True,
         )
 
@@ -33,7 +34,8 @@ class TelegramNotifier:
 
         arrow = "▲" if alert.direction == "UP" else "▼"
         text = (
-            f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}%\n"
+            f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
+            f"(crossed ±{alert.threshold_pct:g}%)\n"
             f"LTP: `{alert.ltp:.2f}` | Prev close: `{alert.prev_close:.2f}`\n"
             f"Direction: {alert.direction}\n"
             f"Time (UTC): {alert.fired_at.strftime('%Y-%m-%d %H:%M:%S')}"

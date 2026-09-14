@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from nse_alert.config import Settings
-from nse_alert.engine import AlertEngine
+from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.feed import KiteFeed, MockFeed
 from nse_alert.notify import build_notifier
 from nse_alert.universe import Instrument, build_universe
@@ -55,10 +55,10 @@ def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None
 @main.command("watch")
 @click.option(
     "--threshold",
-    "threshold_pct",
-    type=float,
+    "threshold_raw",
+    type=str,
     default=None,
-    help="Alert when |day change %| reaches this value (default 13)",
+    help='Alert level(s), comma-separated — e.g. "4,7,11" (default from THRESHOLD_PCT / 13)',
 )
 @click.option(
     "--feed",
@@ -73,13 +73,20 @@ def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None
     help="Mock feed only: stop after N ticks (default 80)",
 )
 def watch_cmd(
-    threshold_pct: float | None,
+    threshold_raw: str | None,
     feed: str | None,
     max_ticks: int | None,
 ) -> None:
-    """Watch the universe and alert when a stock crosses ±threshold% today."""
+    """Watch the universe and alert when a stock crosses each ±threshold% today."""
     settings = Settings()
-    threshold = threshold_pct if threshold_pct is not None else settings.threshold_pct
+    try:
+        thresholds = (
+            parse_thresholds(threshold_raw)
+            if threshold_raw is not None
+            else settings.thresholds
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     feed_mode = (feed or settings.feed_mode).strip().lower()
     use_kite = feed_mode == "kite"
 
@@ -112,7 +119,7 @@ def watch_cmd(
 
     engine = AlertEngine(
         prev_closes=prev_closes,
-        threshold_pct=threshold,
+        thresholds=thresholds,
         state_path=state_path,
     )
     notifier = build_notifier(
@@ -124,15 +131,15 @@ def watch_cmd(
     alert_count = {"n": 0}
 
     def on_tick(symbol: str, ltp: float) -> None:
-        alert = engine.on_tick(symbol, ltp)
-        if alert is not None:
+        for alert in engine.on_tick(symbol, ltp):
             notifier.send(alert)
             alert_count["n"] += 1
 
+    threshold_label = ",".join(f"{t:g}" for t in thresholds)
     logger.info(
-        "Watching %d symbols | threshold=±%.2f%% | feed=%s | telegram=%s",
+        "Watching %d symbols | thresholds=±%s%% | feed=%s | telegram=%s",
         len(instruments),
-        threshold,
+        threshold_label,
         feed_mode,
         "yes" if settings.telegram_configured else "console-only",
     )

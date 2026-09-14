@@ -5,6 +5,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from nse_alert.engine import parse_thresholds
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -13,7 +15,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    threshold_pct: float = Field(default=13.0, alias="THRESHOLD_PCT")
+    # Comma-separated list, e.g. "4,7,11" or a single value "13"
+    threshold_pct: str = Field(default="13", alias="THRESHOLD_PCT")
     min_turnover_cr: float = Field(default=25.0, alias="MIN_TURNOVER_CR")
     min_price: float = Field(default=20.0, alias="MIN_PRICE")
     feed_mode: str = Field(default="mock", alias="FEED_MODE")
@@ -26,6 +29,10 @@ class Settings(BaseSettings):
 
     custom_universe_file: str = Field(default="", alias="CUSTOM_UNIVERSE_FILE")
     state_dir: Path = Field(default=Path(".nse_alert"), alias="STATE_DIR")
+
+    @property
+    def thresholds(self) -> list[float]:
+        return parse_thresholds(self.threshold_pct)
 
     @property
     def use_kite(self) -> bool:
