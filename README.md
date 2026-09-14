@@ -31,7 +31,9 @@ uv run nse-alert universe
 1. Copy env template and fill in values:
 
 ```bash
-cp .env.example .env
+# Prefer the visible template (no leading dot):
+cp env.template .env
+# Or: cp .env.example .env
 ```
 
 2. **Kite Connect (required for live quotes)**  
