@@ -17,6 +17,22 @@ AWS ap-south-1 (Mumbai)  t3.micro / t3.small
 You do **not** need a big AWS footprint. A ₹500–1500/mo VPS with a fixed IP also works
 (DigitalOcean, Hetzner, Lightsail, etc.).
 
+## One-time Oracle checklist (Always Free)
+
+1. Console → **Compute → Instances → Create instance**.
+2. **Name:** `nse-alert` (anything).
+3. **Image:** Canonical Ubuntu **22.04 or 24.04** (ARM / aarch64).
+4. **Shape:** Change shape → **Ampere** → `VM.Standard.A1.Flex` → **1 OCPU**, **6 GB** RAM.
+5. **Networking:** use the default VCN/subnet; tick **Assign a public IPv4 address**.
+6. **SSH keys:** paste your public key (or download Oracle’s generated key and keep it safe).
+7. Create. If it says **out of capacity**, retry later / other AD / Hyderabad — or switch to Lightsail/DO (see `COST.md`).
+8. After Running: open the instance → copy **Public IP**.
+9. **Security list / NSG** for that subnet: allow **SSH (22)** from *your home IP only* (not `0.0.0.0/0` if you can avoid it). Leave **8765** closed until you run `login` on the server.
+10. On [developers.kite.trade](https://developers.kite.trade) → **Profile → IP Whitelist**, add that public IP.
+11. SSH in: `ssh -i /path/to/key ubuntu@PUBLIC_IP` then follow **Install on the VM** below.
+
+Optional: make the IP sticky via **Networking → IP Management → Reserved public IPs** and attach it (so whitelist doesn’t break if you recreate the VM).
+
 ## One-time AWS checklist
 
 1. Launch Ubuntu 22.04+ in **Mumbai**.
