@@ -36,6 +36,8 @@ Opens a small browser page:
 - **Login with Kite** — completes OAuth and writes `KITE_ACCESS_TOKEN` to `.env`, or  
 - **Paste token** — if you already have one.
 
+On success, the page shows the **access token with a Copy button** (handy for pasting onto a cloud VM via `set-token`).
+
 Without opening a browser on the machine:
 
 ```bash

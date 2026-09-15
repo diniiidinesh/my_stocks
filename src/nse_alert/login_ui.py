@@ -91,6 +91,19 @@ def _page(title: str, body: str) -> bytes:
     code {{ color: #c9e4ff; }}
     hr {{ border: 0; border-top: 1px solid var(--border); margin: 1.25rem 0; }}
     .hint {{ font-size: .85rem; }}
+    .token-box {{
+      display: flex; gap: .5rem; align-items: stretch; margin: .75rem 0 1rem;
+    }}
+    .token-box input {{
+      flex: 1; padding: .75rem .8rem; border-radius: 10px; border: 1px solid var(--border);
+      background: #10161d; color: var(--text); font-size: .85rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }}
+    .token-box button {{
+      flex: 0 0 auto; border: 0; cursor: pointer; border-radius: 10px; padding: 0 1rem;
+      background: linear-gradient(135deg, var(--accent-2), #2d5f80); color: white; font-weight: 600;
+    }}
+    .token-box button.copied {{ background: linear-gradient(135deg, var(--accent), #246b52); }}
+    .copy-status {{ min-height: 1.2em; font-size: .85rem; color: var(--muted); margin: 0 0 .5rem; }}
   </style>
 </head>
 <body>
@@ -98,9 +111,53 @@ def _page(title: str, body: str) -> bytes:
     <h1>{html.escape(title)}</h1>
     {body}
   </main>
+  <script>
+    function copyAccessToken(btn) {{
+      const input = document.getElementById("access-token");
+      if (!input) return;
+      const value = input.value;
+      const done = () => {{
+        btn.textContent = "Copied";
+        btn.classList.add("copied");
+        const status = document.getElementById("copy-status");
+        if (status) status.textContent = "Token copied to clipboard.";
+        setTimeout(() => {{
+          btn.textContent = "Copy";
+          btn.classList.remove("copied");
+        }}, 1600);
+      }};
+      if (navigator.clipboard && navigator.clipboard.writeText) {{
+        navigator.clipboard.writeText(value).then(done).catch(() => {{
+          input.select();
+          document.execCommand("copy");
+          done();
+        }});
+      }} else {{
+        input.select();
+        document.execCommand("copy");
+        done();
+      }}
+    }}
+  </script>
 </body>
 </html>"""
     return doc.encode("utf-8")
+
+
+def _success_body(token: str) -> str:
+    safe = html.escape(token)
+    return f"""
+            <p class="ok">Access token saved to <code>.env</code> and <code>FEED_MODE=kite</code> was set.</p>
+            <label for="access-token">Access token</label>
+            <div class="token-box">
+              <input id="access-token" type="text" readonly value="{safe}" />
+              <button type="button" onclick="copyAccessToken(this)">Copy</button>
+            </div>
+            <p id="copy-status" class="copy-status"></p>
+            <p class="hint">Use Copy if you need to paste it onto a cloud VM with <code>nse-alert set-token</code>.</p>
+            <p>You can close this tab and run:</p>
+            <p><code>uv run nse-alert watch</code></p>
+            """
 
 
 def run_login_ui(
@@ -161,12 +218,7 @@ def run_login_ui(
                     self._send(400, _page("Missing token", "<p class='err'>Paste a token first.</p>"))
                     return
                 self._persist(token)
-                body = """
-                <p class="ok">Access token saved to <code>.env</code> and <code>FEED_MODE=kite</code> was set.</p>
-                <p>You can close this tab and run:</p>
-                <p><code>uv run nse-alert watch</code></p>
-                """
-                self._send(200, _page("Token saved", body))
+                self._send(200, _page("Token saved", _success_body(token)))
                 result["done"].set()
                 return
             self._send(404, _page("Not found", "<p class='err'>Unknown form.</p>"))
@@ -206,12 +258,7 @@ def run_login_ui(
                 result["done"].set()
                 return
             self._persist(token)
-            body = """
-            <p class="ok">Login complete. Access token saved to <code>.env</code>.</p>
-            <p>Close this tab and run:</p>
-            <p><code>uv run nse-alert watch</code></p>
-            """
-            self._send(200, _page("Connected", body))
+            self._send(200, _page("Connected", _success_body(token)))
             result["done"].set()
 
         def _persist(self, token: str) -> None:
