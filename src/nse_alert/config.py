@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     feed_mode: str = Field(default="mock", alias="FEED_MODE")
 
     kite_api_key: str = Field(default="", alias="KITE_API_KEY")
+    kite_api_secret: str = Field(default="", alias="KITE_API_SECRET")
     kite_access_token: str = Field(default="", alias="KITE_ACCESS_TOKEN")
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")

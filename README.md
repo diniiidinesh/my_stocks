@@ -36,8 +36,14 @@ cp .env.example .env
 
 2. **Kite Connect (required for live quotes)**  
    - Paid **Connect** plan: **~₹500 / month / API key** (free Personal apps cannot stream WebSocket market data).  
-   - Put `KITE_API_KEY` and a fresh daily `KITE_ACCESS_TOKEN` in `.env`.  
-   - Run `uv run nse-alert login-hint` for the token steps.
+   - In `.env` set permanent values: `KITE_API_KEY` and `KITE_API_SECRET`.  
+   - In the Kite app, set **Redirect URL** to `http://127.0.0.1:8765/callback`.  
+   - Each trading day, get a fresh access token via the local UI:
+     ```bash
+     uv run nse-alert login
+     ```
+     That opens a browser page where you can **Login with Kite** (auto-saves token) or **paste** an access token.  
+     Or without the UI: `uv run nse-alert set-token YOUR_ACCESS_TOKEN`
 
 3. **Telegram (recommended)**  
    - Create a bot with [@BotFather](https://t.me/BotFather), get the token.  
@@ -76,9 +82,11 @@ WhatsApp is feasible later via official Cloud API / a BSP, but it adds per-messa
 ## CLI
 
 ```text
+nse-alert login [--port 8765]     # browser UI: Login with Kite OR paste token
+nse-alert set-token ACCESS_TOKEN  # paste token into .env (no browser)
 nse-alert watch [--threshold 4,7,11] [--feed mock|kite] [--max-ticks N]
 nse-alert universe [--min-turnover-cr 25] [--min-price 20]
-nse-alert login-hint
+nse-alert login-hint              # short reminder of the login setup
 ```
 
 ## How alerts work
@@ -94,6 +102,8 @@ nse-alert login-hint
 src/nse_alert/
   cli.py              # click entrypoint
   config.py           # pydantic-settings / .env
+  login_ui.py         # local browser UI for daily Kite token
+  envfile.py          # .env read/write helpers
   universe.py         # Kite instruments + quote liquidity screen
   feed.py             # MockFeed + KiteFeed (LTP)
   engine.py           # % move + dedupe

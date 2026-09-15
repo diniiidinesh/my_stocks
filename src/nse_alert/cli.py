@@ -203,23 +203,70 @@ def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:
     return instruments
 
 
+@main.command("login")
+@click.option("--port", default=8765, show_default=True, help="Local UI port")
+@click.option("--no-browser", is_flag=True, help="Do not auto-open the browser")
+def login_cmd(port: int, no_browser: bool) -> None:
+    """Open a local page to login with Kite or paste today's access token."""
+    from nse_alert.envfile import read_env_value
+    from nse_alert.login_ui import redirect_url, run_login_ui
+
+    settings = Settings()
+    api_key = settings.kite_api_key or read_env_value("KITE_API_KEY")
+    api_secret = settings.kite_api_secret or read_env_value("KITE_API_SECRET")
+    if not api_key or not api_secret:
+        raise click.ClickException(
+            "Set KITE_API_KEY and KITE_API_SECRET in .env first "
+            "(from https://developers.kite.trade/apps). "
+            f"Also set the app Redirect URL to {redirect_url(port)}"
+        )
+
+    click.echo(f"Opening login UI on http://127.0.0.1:{port}/")
+    click.echo(f"Kite Redirect URL must be: {redirect_url(port)}")
+    try:
+        token = run_login_ui(
+            api_key=api_key,
+            api_secret=api_secret,
+            port=port,
+            open_browser=not no_browser,
+        )
+    except KeyboardInterrupt as exc:
+        raise click.ClickException("Login cancelled") from exc
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "***"
+    click.echo(f"Saved access token ({masked}) to .env — run: uv run nse-alert watch")
+
+
+@main.command("set-token")
+@click.argument("access_token")
+def set_token_cmd(access_token: str) -> None:
+    """Paste today's Kite access token into .env (no browser)."""
+    from nse_alert.envfile import upsert_env
+
+    token = access_token.strip()
+    if not token:
+        raise click.ClickException("Access token is empty")
+    upsert_env({"KITE_ACCESS_TOKEN": token, "FEED_MODE": "kite"})
+    click.echo("Saved KITE_ACCESS_TOKEN and set FEED_MODE=kite")
+
+
 @main.command("login-hint")
 def login_hint() -> None:
-    """Print how to generate a daily Kite access token."""
+    """Deprecated: use `nse-alert login` instead."""
+    from nse_alert.login_ui import redirect_url
+
     click.echo(
-        """
-Kite access tokens expire every trading day.
+        f"""
+Preferred: uv run nse-alert login
 
-1. Create a paid Connect app at https://developers.kite.trade/ (~₹500/month for live data)
-2. Set KITE_API_KEY in .env
-3. Open the login URL (replace YOUR_API_KEY):
-   https://kite.zerodha.com/connect/login?v=3&api_key=YOUR_API_KEY
-4. After login, copy the request_token from the redirect URL
-5. Exchange it for an access_token:
-
-   python -c "from kiteconnect import KiteConnect; k=KiteConnect(api_key='YOUR_API_KEY'); print(k.generate_session('REQUEST_TOKEN', api_secret='YOUR_API_SECRET')['access_token'])"
-
-6. Put the access_token in KITE_ACCESS_TOKEN and set FEED_MODE=kite
+One-time setup:
+1. Paid Connect app at https://developers.kite.trade/
+2. .env: KITE_API_KEY=... and KITE_API_SECRET=...
+3. App Redirect URL: {redirect_url()}
+4. Each trading day: uv run nse-alert login
+   (or paste: uv run nse-alert set-token YOUR_ACCESS_TOKEN)
 """.strip()
     )
 
