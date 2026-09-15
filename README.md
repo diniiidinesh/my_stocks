@@ -1,6 +1,6 @@
 # NSE Alert
 
-Realtime watcher for **NSE cash stocks** that move a configurable **±%** from the previous close (e.g. **4%, 7%, and 11%**). Streams LTP via **Zerodha Kite Connect** WebSocket and notifies you on **Telegram** (with console fallback).
+Realtime watcher for **NSE cash stocks** that move a configurable **±%** from the previous close (e.g. **4%, 7%, and 11%**). Streams LTP via **Zerodha Kite Connect** WebSocket, notifies on **Telegram**, can optionally **place orders**, and is designed to run on a **cloud VM** with a static IP.
 
 ## What it watches
 
@@ -86,9 +86,41 @@ nse-alert login [--port 8765]     # browser UI: Login with Kite OR paste token
 nse-alert set-token ACCESS_TOKEN  # paste token into .env (no browser)
 nse-alert watch [--threshold 4,7,11] [--feed mock|kite] [--max-ticks N]
 nse-alert universe [--min-turnover-cr 25] [--min-price 20]
-nse-alert report [--date YYYY-MM-DD] [--telegram]  # EOD crossings + time gaps
-nse-alert login-hint              # short reminder of the login setup
+nse-alert report [--date YYYY-MM-DD] [--telegram]
+nse-alert order buy|sell SYMBOL [--qty N] [--dry-run|--live]
+nse-alert pending                 # list confirmations
+nse-alert confirm ID              # confirm a pending order
+nse-alert login-hint
 ```
+
+## Orders (optional)
+
+Set in `.env`:
+
+```env
+TRADE_MODE=dry_run          # off | dry_run | confirm | auto
+TRADE_QTY=1
+TRADE_PRODUCT=CNC
+TRADE_ON_THRESHOLDS=7       # only act when ±7% alert fires
+TRADE_SIDES=up              # BUY on UP alerts
+TRADE_MAX_ORDERS_PER_DAY=5
+```
+
+- `dry_run` — log/Telegram only, no real order (start here)
+- `confirm` — Telegram `CONFIRM abc123` (or `nse-alert confirm abc123`) then place
+- `auto` — place immediately (use only after cloud static IP is whitelisted)
+
+API **order** placement needs a **whitelisted static IP** (Zerodha / SEBI, from 1 Apr 2026). See [deploy/CLOUD.md](deploy/CLOUD.md).
+
+## Cloud deploy
+
+```bash
+# on an Ubuntu VM (AWS Mumbai + Elastic IP recommended)
+docker compose up -d --build
+docker compose logs -f
+```
+
+Full guide (static IP, daily login, systemd): **[deploy/CLOUD.md](deploy/CLOUD.md)**.
 
 ## How alerts work
 

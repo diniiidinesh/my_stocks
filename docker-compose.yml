@@ -1,0 +1,26 @@
+services:
+  nse-alert:
+    build: .
+    container_name: nse-alert
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STATE_DIR: /data/.nse_alert
+      # Prefer kite in cloud; override in .env if needed
+      FEED_MODE: ${FEED_MODE:-kite}
+    volumes:
+      - nse_alert_data:/data
+      - ./universes:/app/universes:ro
+      - ./.env:/app/.env:ro
+    # Uncomment when running `docker compose run --service-ports nse-alert nse-alert login`
+    # ports:
+    #   - "8765:8765"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  nse_alert_data:
