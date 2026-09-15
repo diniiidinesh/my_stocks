@@ -9,6 +9,26 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def parse_thresholds(raw: str | float | int | list[float] | tuple[float, ...]) -> list[float]:
+    """Parse one or more positive thresholds from CLI/env input.
+
+    Accepts ``13``, ``"13"``, ``"4,7,11"``, or ``[4, 7, 11]``.
+    """
+    if isinstance(raw, (int, float)):
+        values = [float(raw)]
+    elif isinstance(raw, (list, tuple)):
+        values = [float(x) for x in raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            raise ValueError("At least one threshold is required")
+        values = [float(part.strip()) for part in text.split(",") if part.strip()]
+    cleaned = sorted({abs(v) for v in values if abs(v) > 0})
+    if not cleaned:
+        raise ValueError("At least one positive threshold is required")
+    return cleaned
+
+
 @dataclass(frozen=True, slots=True)
 class Alert:
     symbol: str
@@ -16,27 +36,85 @@ class Alert:
     prev_close: float
     change_pct: float
     direction: str
+    threshold_pct: float
     fired_at: datetime
+    is_asm: bool = False
+    is_fno: bool = False
+
+    def to_event(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "ltp": self.ltp,
+            "prev_close": self.prev_close,
+            "change_pct": self.change_pct,
+            "direction": self.direction,
+            "threshold_pct": self.threshold_pct,
+            "fired_at": self.fired_at.isoformat(),
+            "is_asm": self.is_asm,
+            "is_fno": self.is_fno,
+        }
+
+
+def alert_from_event(data: dict[str, object]) -> Alert:
+    fired_raw = str(data["fired_at"])
+    fired_at = datetime.fromisoformat(fired_raw)
+    if fired_at.tzinfo is None:
+        fired_at = fired_at.replace(tzinfo=timezone.utc)
+    return Alert(
+        symbol=str(data["symbol"]),
+        ltp=float(data["ltp"]),
+        prev_close=float(data["prev_close"]),
+        change_pct=float(data["change_pct"]),
+        direction=str(data["direction"]),
+        threshold_pct=float(data["threshold_pct"]),
+        fired_at=fired_at,
+        is_asm=bool(data.get("is_asm", False)),
+        is_fno=bool(data.get("is_fno", False)),
+    )
 
 
 class AlertEngine:
-    """Compute day % move and fire at most once per symbol per calendar day."""
+    """Compute day % move and fire once per symbol/direction/threshold per day."""
 
     def __init__(
         self,
         *,
         prev_closes: dict[str, float],
-        threshold_pct: float,
+        thresholds: list[float] | float,
         state_path: Path,
+        fo_symbols: set[str] | None = None,
+        fo_only_thresholds: list[float] | set[float] | None = None,
+        asm_symbols: set[str] | None = None,
     ) -> None:
         self.prev_closes = prev_closes
-        self.threshold_pct = abs(threshold_pct)
+        if isinstance(thresholds, (int, float)):
+            self.thresholds = parse_thresholds(thresholds)
+        else:
+            self.thresholds = parse_thresholds(list(thresholds))
         self.state_path = state_path
+        self.fo_symbols = {s.upper() for s in (fo_symbols or set())}
+        self.fo_only_thresholds = {
+            float(t) for t in (fo_only_thresholds or [])
+        }
+        self.asm_symbols = {s.upper() for s in (asm_symbols or set())}
         self._fired: set[str] = set()
+        self._events: list[dict[str, object]] = []
         self._load_state()
 
+    def _thresholds_for(self, symbol: str) -> list[float]:
+        """Thresholds applicable to this symbol (e.g. ±4% only for F&O names)."""
+        if not self.fo_only_thresholds:
+            return self.thresholds
+        if symbol.upper() in self.fo_symbols:
+            return self.thresholds
+        return [t for t in self.thresholds if t not in self.fo_only_thresholds]
     def _today_key(self) -> str:
         return date.today().isoformat()
+
+    @staticmethod
+    def _fired_key(symbol: str, direction: str, threshold: float) -> str:
+        # Normalize so 4 and 4.0 collide in state.
+        return f"{symbol}|{direction}|{threshold:g}"
 
     def _load_state(self) -> None:
         if not self.state_path.exists():
@@ -49,38 +127,77 @@ class AlertEngine:
         if data.get("date") != self._today_key():
             return
         self._fired = set(data.get("fired", []))
+        events = data.get("events", [])
+        if isinstance(events, list):
+            self._events = [e for e in events if isinstance(e, dict)]
 
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"date": self._today_key(), "fired": sorted(self._fired)}
+        payload = {
+            "date": self._today_key(),
+            "fired": sorted(self._fired),
+            "events": self._events,
+        }
         self.state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    def on_tick(self, symbol: str, ltp: float) -> Alert | None:
+    def events(self) -> list[Alert]:
+        return [alert_from_event(e) for e in self._events]
+
+    def on_tick(self, symbol: str, ltp: float) -> list[Alert]:
+        """Return newly crossed threshold alerts for this tick (may be multiple)."""
         prev = self.prev_closes.get(symbol)
         if prev is None or prev <= 0 or ltp <= 0:
-            return None
+            return []
+        applicable = self._thresholds_for(symbol)
+        if not applicable:
+            return []
         change_pct = (ltp / prev - 1.0) * 100.0
-        if abs(change_pct) < self.threshold_pct:
-            return None
-        if symbol in self._fired:
-            return None
-        self._fired.add(symbol)
-        self._save_state()
+        abs_move = abs(change_pct)
+        if abs_move < applicable[0]:
+            return []
+
         direction = "UP" if change_pct > 0 else "DOWN"
-        alert = Alert(
-            symbol=symbol,
-            ltp=ltp,
-            prev_close=prev,
-            change_pct=change_pct,
-            direction=direction,
-            fired_at=datetime.now(timezone.utc),
-        )
-        logger.info(
-            "ALERT %s %s %.2f%% LTP=%.2f prev=%.2f",
-            alert.direction,
-            alert.symbol,
-            alert.change_pct,
-            alert.ltp,
-            alert.prev_close,
-        )
-        return alert
+        now = datetime.now(timezone.utc)
+        is_asm = symbol.upper() in self.asm_symbols
+        is_fno = symbol.upper() in self.fo_symbols
+        alerts: list[Alert] = []
+        for threshold in applicable:
+            if abs_move < threshold:
+                break
+            key = self._fired_key(symbol, direction, threshold)
+            if key in self._fired:
+                continue
+            self._fired.add(key)
+            alert = Alert(
+                symbol=symbol,
+                ltp=ltp,
+                prev_close=prev,
+                change_pct=change_pct,
+                direction=direction,
+                threshold_pct=threshold,
+                fired_at=now,
+                is_asm=is_asm,
+                is_fno=is_fno,
+            )
+            alerts.append(alert)
+            self._events.append(alert.to_event())
+            tags = []
+            if is_fno:
+                tags.append("F&O")
+            if is_asm:
+                tags.append("ASM")
+            tag_note = f" [{' '.join(tags)}]" if tags else ""
+            logger.info(
+                "ALERT %s %s crossed ±%.4g%% (now %.2f%%) LTP=%.2f prev=%.2f%s",
+                alert.direction,
+                alert.symbol,
+                alert.threshold_pct,
+                alert.change_pct,
+                alert.ltp,
+                alert.prev_close,
+                tag_note,
+            )
+
+        if alerts:
+            self._save_state()
+        return alerts

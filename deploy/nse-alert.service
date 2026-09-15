@@ -1,0 +1,18 @@
+[Unit]
+Description=NSE Alert watcher (Kite + Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/nse-alert
+EnvironmentFile=/opt/nse-alert/.env
+ExecStart=/opt/nse-alert/.venv/bin/nse-alert watch
+Restart=on-failure
+RestartSec=10
+# Daily token expires; process will error until you refresh — restart after login.
+User=ubuntu
+Group=ubuntu
+
+[Install]
+WantedBy=multi-user.target

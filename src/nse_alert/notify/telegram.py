@@ -8,16 +8,28 @@ from nse_alert.engine import Alert
 logger = logging.getLogger(__name__)
 
 
+def _alert_tags(alert: Alert) -> str:
+    tags: list[str] = []
+    if alert.is_fno:
+        tags.append("F&O")
+    if alert.is_asm:
+        tags.append("ASM")
+    return " · ".join(tags)
+
+
 class Notifier(Protocol):
     def send(self, alert: Alert) -> None: ...
 
 
 class ConsoleNotifier:
     def send(self, alert: Alert) -> None:
+        tags = _alert_tags(alert)
+        tag_note = f" {tags}" if tags else ""
         print(
             f"[ALERT] {alert.direction} {alert.symbol} "
-            f"{alert.change_pct:+.2f}% LTP={alert.ltp:.2f} "
-            f"prev={alert.prev_close:.2f} @ {alert.fired_at.isoformat()}",
+            f"{alert.change_pct:+.2f}% (crossed ±{alert.threshold_pct:g}%) "
+            f"LTP={alert.ltp:.2f} prev={alert.prev_close:.2f}{tag_note} "
+            f"@ {alert.fired_at.isoformat()}",
             flush=True,
         )
 
@@ -29,32 +41,57 @@ class TelegramNotifier:
         self._url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
     def send(self, alert: Alert) -> None:
-        import httpx
-
         arrow = "▲" if alert.direction == "UP" else "▼"
+        tags = _alert_tags(alert)
+        tag_line = f"\nTags: *{tags}*" if tags else ""
         text = (
-            f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}%\n"
+            f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
+            f"(crossed ±{alert.threshold_pct:g}%)\n"
             f"LTP: `{alert.ltp:.2f}` | Prev close: `{alert.prev_close:.2f}`\n"
-            f"Direction: {alert.direction}\n"
+            f"Direction: {alert.direction}"
+            f"{tag_line}\n"
             f"Time (UTC): {alert.fired_at.strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        try:
-            resp = httpx.post(
-                self._url,
-                json={
-                    "chat_id": self.chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True,
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            logger.info("Telegram alert sent for %s", alert.symbol)
-        except httpx.HTTPError as exc:
-            logger.error("Telegram send failed for %s: %s", alert.symbol, exc)
-            # Always surface on console so a failed push is not silent.
-            ConsoleNotifier().send(alert)
+        self.send_text(text, parse_mode="Markdown")
+
+    def send_text(self, text: str, *, parse_mode: str | None = None) -> None:
+        import httpx
+
+        # Telegram hard limit is 4096 characters.
+        chunks = _chunk_text(text, 3500)
+        for chunk in chunks:
+            payload: dict[str, object] = {
+                "chat_id": self.chat_id,
+                "text": chunk,
+                "disable_web_page_preview": True,
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            try:
+                resp = httpx.post(self._url, json=payload, timeout=10.0)
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.error("Telegram send failed: %s", exc)
+                print(chunk, flush=True)
+
+
+def _chunk_text(text: str, limit: int) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in text.splitlines(keepends=True):
+        if size + len(line) > limit and current:
+            chunks.append("".join(current))
+            current = [line]
+            size = len(line)
+        else:
+            current.append(line)
+            size += len(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
 
 
 class MultiNotifier:

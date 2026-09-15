@@ -8,10 +8,19 @@ from pathlib import Path
 import click
 
 from nse_alert.config import Settings
-from nse_alert.engine import AlertEngine
+from nse_alert.confirm_bot import TelegramConfirmListener
+from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.feed import KiteFeed, MockFeed
-from nse_alert.notify import build_notifier
-from nse_alert.universe import Instrument, build_universe
+from nse_alert.notify import TelegramNotifier, build_notifier
+from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest
+from nse_alert.report import (
+    build_day_report,
+    format_day_report,
+    load_events,
+    write_day_report,
+)
+from nse_alert.surveillance import load_asm_symbols, load_nfo_equity_underlyings
+from nse_alert.universe import Instrument, build_universe, _kite_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +39,7 @@ def main() -> None:
 @click.option("--min-turnover-cr", type=float, default=None, help="Min prior-day turnover in ₹ crore")
 @click.option("--min-price", type=float, default=None, help="Min close price filter")
 def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None:
-    """Print the liquidity-screened intraday universe (mock or live bhavcopy)."""
+    """Print the liquidity-screened universe (mock, or Kite instruments + quotes)."""
     settings = Settings()
     tovr = min_turnover_cr if min_turnover_cr is not None else settings.min_turnover_cr
     price = min_price if min_price is not None else settings.min_price
@@ -55,10 +64,10 @@ def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None
 @main.command("watch")
 @click.option(
     "--threshold",
-    "threshold_pct",
-    type=float,
+    "threshold_raw",
+    type=str,
     default=None,
-    help="Alert when |day change %| reaches this value (default 13)",
+    help='Alert level(s), comma-separated — e.g. "4,7,11" (default from THRESHOLD_PCT / 13)',
 )
 @click.option(
     "--feed",
@@ -73,13 +82,20 @@ def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None
     help="Mock feed only: stop after N ticks (default 80)",
 )
 def watch_cmd(
-    threshold_pct: float | None,
+    threshold_raw: str | None,
     feed: str | None,
     max_ticks: int | None,
 ) -> None:
-    """Watch the universe and alert when a stock crosses ±threshold% today."""
+    """Watch the universe and alert when a stock crosses each ±threshold% today."""
     settings = Settings()
-    threshold = threshold_pct if threshold_pct is not None else settings.threshold_pct
+    try:
+        thresholds = (
+            parse_thresholds(threshold_raw)
+            if threshold_raw is not None
+            else settings.thresholds
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     feed_mode = (feed or settings.feed_mode).strip().lower()
     use_kite = feed_mode == "kite"
 
@@ -110,31 +126,118 @@ def watch_cmd(
     if not use_kite and state_path.exists():
         state_path.unlink()
 
+    fo_symbols: set[str] = set()
+    asm_symbols: set[str] = set()
+    fo_only = settings.fo_only_threshold_list
+    if use_kite:
+        kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+        if fo_only:
+            try:
+                fo_symbols = load_nfo_equity_underlyings(kite)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not load NFO underlyings (%s); FO-only thresholds disabled",
+                    exc,
+                )
+                fo_only = []
+        asm_symbols = load_asm_symbols(
+            url=settings.asm_sheet_url,
+            cache_path=settings.state_dir / "asm_symbols.txt",
+            enabled=settings.asm_enabled,
+        )
+    else:
+        # Mock: treat all demo symbols as F&O so FO-only levels still exercise.
+        fo_symbols = {i.symbol for i in instruments}
+
     engine = AlertEngine(
         prev_closes=prev_closes,
-        threshold_pct=threshold,
+        thresholds=thresholds,
         state_path=state_path,
+        fo_symbols=fo_symbols,
+        fo_only_thresholds=fo_only,
+        asm_symbols=asm_symbols,
     )
     notifier = build_notifier(
         telegram_bot_token=settings.telegram_bot_token,
         telegram_chat_id=settings.telegram_chat_id,
         always_console=True,
     )
+    book = OrderBook(settings.state_dir / "orders.json")
+    executor = _build_executor(settings, book)
+    tg: TelegramNotifier | None = None
+    if settings.telegram_configured:
+        tg = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
 
     alert_count = {"n": 0}
 
+    def _handle_trade(alert: object) -> None:
+        from nse_alert.engine import Alert as AlertType
+
+        assert isinstance(alert, AlertType)
+        if not executor.should_trade_alert(
+            direction=alert.direction, threshold_pct=alert.threshold_pct
+        ):
+            return
+        req = executor.build_request_from_alert(
+            symbol=alert.symbol,
+            direction=alert.direction,
+            threshold_pct=alert.threshold_pct,
+            change_pct=alert.change_pct,
+        )
+        mode = executor.mode
+        if mode == "confirm":
+            pending = book.add_pending(
+                req,
+                alert_symbol=alert.symbol,
+                alert_threshold=alert.threshold_pct,
+                alert_direction=alert.direction,
+                entry_ltp=alert.ltp,
+                ttl_minutes=settings.trade_confirm_ttl_minutes,
+            )
+            stop_px = executor.stop_price_from_entry(alert.ltp)
+            msg = (
+                f"CONFIRM ORDER `{pending.id}`\n"
+                f"{req.side} {req.quantity}x {req.symbol} ({req.product} {req.order_type})\n"
+                f"Entry≈`{alert.ltp:.2f}` → SL-M trigger≈`{stop_px:.2f}` "
+                f"(-{settings.trade_stop_loss_pct:g}%)\n"
+                f"Reason: {req.reason}\n\n"
+                f"Reply: `CONFIRM {pending.id}` or `CANCEL {pending.id}`\n"
+                f"Or: `uv run nse-alert confirm {pending.id}`"
+            )
+            logger.info("Pending order %s for %s", pending.id, req.symbol)
+            if tg:
+                tg.send_text(msg, parse_mode="Markdown")
+            else:
+                click.echo(msg)
+            return
+        if mode in {"dry_run", "auto"}:
+            entry, sl = executor.place_entry_with_stop(req, entry_ltp=alert.ltp)
+            note = f"TRADE [{entry.mode}] {entry.message}"
+            if sl is not None:
+                note += f"\n{sl.message}"
+            logger.info("%s", note)
+            if tg:
+                tg.send_text(note)
+
     def on_tick(symbol: str, ltp: float) -> None:
-        alert = engine.on_tick(symbol, ltp)
-        if alert is not None:
+        for alert in engine.on_tick(symbol, ltp):
             notifier.send(alert)
             alert_count["n"] += 1
+            _handle_trade(alert)
 
+    threshold_label = ",".join(f"{t:g}" for t in thresholds)
+    fo_only_label = ",".join(f"{t:g}" for t in fo_only) if fo_only else "none"
     logger.info(
-        "Watching %d symbols | threshold=±%.2f%% | feed=%s | telegram=%s",
+        "Watching %d symbols | thresholds=±%s%% | fo_only=±%s%% (%d F&O) | "
+        "asm=%d | feed=%s | telegram=%s | trade=%s",
         len(instruments),
-        threshold,
+        threshold_label,
+        fo_only_label,
+        len(fo_symbols),
+        len(asm_symbols),
         feed_mode,
         "yes" if settings.telegram_configured else "console-only",
+        executor.mode,
     )
 
     price_feed: MockFeed | KiteFeed
@@ -155,13 +258,35 @@ def watch_cmd(
         )
 
     stop = {"flag": False}
+    confirm_listener: TelegramConfirmListener | None = None
+
+    def _on_confirm(pending_id: str) -> None:
+        _confirm_pending(settings, executor, book, pending_id, tg)
+
+    def _on_cancel(pending_id: str) -> None:
+        item = book.mark_pending(pending_id, "cancelled")
+        msg = f"Cancelled pending order {pending_id}" if item else f"Unknown id {pending_id}"
+        logger.info("%s", msg)
+        if tg:
+            tg.send_text(msg)
 
     def _handle_sig(_signum: int, _frame: object) -> None:
         stop["flag"] = True
         price_feed.stop()
+        if confirm_listener:
+            confirm_listener.stop()
 
     signal.signal(signal.SIGINT, _handle_sig)
     signal.signal(signal.SIGTERM, _handle_sig)
+
+    if executor.mode == "confirm" and settings.telegram_configured:
+        confirm_listener = TelegramConfirmListener(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+            on_confirm=_on_confirm,
+            on_cancel=_on_cancel,
+        )
+        confirm_listener.start()
 
     price_feed.start()
     try:
@@ -174,10 +299,136 @@ def watch_cmd(
                 time.sleep(0.05)
     finally:
         price_feed.stop()
+        if confirm_listener:
+            confirm_listener.stop()
 
     logger.info("Done. Alerts fired this run: %d", alert_count["n"])
+    _emit_day_report(settings, telegram=settings.telegram_configured)
     if not use_kite and alert_count["n"] == 0:
         raise SystemExit(1)
+
+
+def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
+    return OrderExecutor(
+        api_key=settings.kite_api_key,
+        access_token=settings.kite_access_token,
+        mode=settings.resolved_trade_mode,
+        default_qty=settings.trade_qty,
+        product=settings.trade_product,
+        order_type=settings.trade_order_type,
+        market_protection=settings.trade_market_protection,
+        max_orders_per_day=settings.trade_max_orders_per_day,
+        trade_on_thresholds=settings.trade_threshold_list,
+        trade_sides=settings.trade_sides,
+        stop_loss_pct=settings.trade_stop_loss_pct,
+        book=book,
+    )
+
+
+def _confirm_pending(
+    settings: Settings,
+    executor: OrderExecutor,
+    book: OrderBook,
+    pending_id: str,
+    tg: TelegramNotifier | None,
+) -> None:
+    item = book.get_pending(pending_id)
+    if item is None:
+        msg = f"No pending order `{pending_id}`"
+        logger.warning("%s", msg)
+        if tg:
+            tg.send_text(msg, parse_mode="Markdown")
+        return
+    if item.status != "pending":
+        msg = f"Pending `{pending_id}` is already {item.status}"
+        if tg:
+            tg.send_text(msg, parse_mode="Markdown")
+        return
+    req_data = item.request
+    request = OrderRequest(
+        symbol=str(req_data["symbol"]),
+        side=req_data["side"],  # type: ignore[arg-type]
+        quantity=int(req_data["quantity"]),
+        product=str(req_data["product"]),
+        order_type=str(req_data["order_type"]),
+        price=req_data.get("price"),  # type: ignore[arg-type]
+        trigger_price=req_data.get("trigger_price"),  # type: ignore[arg-type]
+        market_protection=int(req_data.get("market_protection") or 2),
+        tag=str(req_data.get("tag") or "nsealrt"),
+        reason=str(req_data.get("reason") or "confirmed"),
+    )
+    force = "dry_run" if executor.mode == "dry_run" else "auto"
+    entry_ltp = float(item.entry_ltp or 0.0)
+    if entry_ltp <= 0:
+        entry_ltp = float(req_data.get("price") or 0.0) or 0.0
+    entry, sl = executor.place_entry_with_stop(
+        request, entry_ltp=entry_ltp or 0.01, force_mode=force
+    )
+    book.mark_pending(pending_id, "confirmed" if entry.ok else "pending")
+    msg = entry.message
+    if sl is not None:
+        msg += f"\n{sl.message}"
+    if tg:
+        tg.send_text(msg)
+
+
+def _emit_day_report(settings: Settings, *, telegram: bool) -> None:
+    state_path = settings.state_dir / "fired.json"
+    events = load_events(state_path)
+    report = build_day_report(events)
+    text = format_day_report(report)
+    out_path = settings.state_dir / f"report-{report.report_date.isoformat()}.txt"
+    write_day_report(report, out_path)
+    click.echo("")
+    click.echo(text)
+    click.echo(f"\nSaved report: {out_path}")
+    if telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+        TelegramNotifier(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+        ).send_text(text)
+
+
+@main.command("report")
+@click.option(
+    "--date",
+    "report_date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Calendar day to report (default: today)",
+)
+@click.option(
+    "--telegram/--no-telegram",
+    default=False,
+    help="Also send the report to Telegram",
+)
+def report_cmd(report_date: object | None, telegram: bool) -> None:
+    """Show end-of-day summary: crossings per threshold and multi-level time gaps."""
+    from datetime import date as date_cls
+
+    settings = Settings()
+    day = (
+        report_date.date()  # type: ignore[attr-defined]
+        if report_date is not None
+        else date_cls.today()
+    )
+    state_path = settings.state_dir / "fired.json"
+    events = load_events(state_path, as_of=day)
+    report = build_day_report(events, report_date=day)
+    text = format_day_report(report)
+    out_path = settings.state_dir / f"report-{day.isoformat()}.txt"
+    write_day_report(report, out_path)
+    click.echo(text)
+    click.echo(f"\nSaved report: {out_path}")
+    if telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+        TelegramNotifier(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+        ).send_text(text)
+    elif telegram:
+        raise click.ClickException(
+            "Telegram requested but TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are unset"
+        )
 
 
 def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:
@@ -196,23 +447,142 @@ def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:
     return instruments
 
 
+@main.command("order")
+@click.argument("side", type=click.Choice(["buy", "sell"], case_sensitive=False))
+@click.argument("symbol")
+@click.option("--qty", type=int, default=None, help="Quantity (default TRADE_QTY)")
+@click.option(
+    "--dry-run/--live",
+    default=True,
+    help="Dry-run by default; pass --live to send to Kite",
+)
+def order_cmd(side: str, symbol: str, qty: int | None, dry_run: bool) -> None:
+    """Place a manual NSE equity order (CNC/MIS from .env)."""
+    settings = Settings()
+    book = OrderBook(settings.state_dir / "orders.json")
+    executor = _build_executor(settings, book)
+    request = OrderRequest(
+        symbol=symbol.upper(),
+        side="BUY" if side.lower() == "buy" else "SELL",
+        quantity=qty if qty is not None else settings.trade_qty,
+        product=settings.trade_product,
+        order_type=settings.trade_order_type,
+        price=None,
+        trigger_price=None,
+        market_protection=settings.trade_market_protection,
+        tag="nsealrt",
+        reason="manual CLI order",
+    )
+    mode = "dry_run" if dry_run else "auto"
+    if mode == "auto" and (not settings.kite_api_key or not settings.kite_access_token):
+        raise click.ClickException("Live orders need KITE_API_KEY and KITE_ACCESS_TOKEN")
+    result = executor.place(request, force_mode=mode)
+    click.echo(result.message)
+    if not result.ok:
+        raise SystemExit(1)
+
+
+@main.command("pending")
+def pending_cmd() -> None:
+    """List orders waiting for Telegram/CLI confirmation."""
+    settings = Settings()
+    book = OrderBook(settings.state_dir / "orders.json")
+    items = book.list_pending()
+    if not items:
+        click.echo("No pending confirmations")
+        return
+    for item in items:
+        req = item.request
+        click.echo(
+            f"{item.id}  {req.get('side')} {req.get('quantity')}x {req.get('symbol')}  "
+            f"(alert ±{item.alert_threshold:g}% {item.alert_direction})  "
+            f"expires {item.expires_at}"
+        )
+
+
+@main.command("confirm")
+@click.argument("pending_id")
+def confirm_cmd(pending_id: str) -> None:
+    """Confirm a pending order id from TRADE_MODE=confirm."""
+    settings = Settings()
+    book = OrderBook(settings.state_dir / "orders.json")
+    executor = _build_executor(settings, book)
+    tg = (
+        TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+        if settings.telegram_configured
+        else None
+    )
+    _confirm_pending(settings, executor, book, pending_id.upper(), tg)
+    item = book.get_pending(pending_id)
+    if item is None:
+        raise click.ClickException(f"Unknown pending id {pending_id}")
+    click.echo(f"Pending {pending_id} → {item.status}")
+
+
+@main.command("login")
+@click.option("--port", default=8765, show_default=True, help="Local UI port")
+@click.option("--no-browser", is_flag=True, help="Do not auto-open the browser")
+def login_cmd(port: int, no_browser: bool) -> None:
+    """Open a local page to login with Kite or paste today's access token."""
+    from nse_alert.envfile import read_env_value
+    from nse_alert.login_ui import redirect_url, run_login_ui
+
+    settings = Settings()
+    api_key = settings.kite_api_key or read_env_value("KITE_API_KEY")
+    api_secret = settings.kite_api_secret or read_env_value("KITE_API_SECRET")
+    if not api_key or not api_secret:
+        raise click.ClickException(
+            "Set KITE_API_KEY and KITE_API_SECRET in .env first "
+            "(from https://developers.kite.trade/apps). "
+            f"Also set the app Redirect URL to {redirect_url(port)}"
+        )
+
+    click.echo(f"Opening login UI on http://127.0.0.1:{port}/")
+    click.echo(f"Kite Redirect URL must be: {redirect_url(port)}")
+    try:
+        token = run_login_ui(
+            api_key=api_key,
+            api_secret=api_secret,
+            port=port,
+            open_browser=not no_browser,
+        )
+    except KeyboardInterrupt as exc:
+        raise click.ClickException("Login cancelled") from exc
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    masked = token[:4] + "…" + token[-4:] if len(token) > 8 else "***"
+    click.echo(f"Saved access token ({masked}) to .env — run: uv run nse-alert watch")
+
+
+@main.command("set-token")
+@click.argument("access_token")
+def set_token_cmd(access_token: str) -> None:
+    """Paste today's Kite access token into .env (no browser)."""
+    from nse_alert.envfile import upsert_env
+
+    token = access_token.strip()
+    if not token:
+        raise click.ClickException("Access token is empty")
+    upsert_env({"KITE_ACCESS_TOKEN": token, "FEED_MODE": "kite"})
+    click.echo("Saved KITE_ACCESS_TOKEN and set FEED_MODE=kite")
+
+
 @main.command("login-hint")
 def login_hint() -> None:
-    """Print how to generate a daily Kite access token."""
+    """Deprecated: use `nse-alert login` instead."""
+    from nse_alert.login_ui import redirect_url
+
     click.echo(
-        """
-Kite access tokens expire every trading day.
+        f"""
+Preferred: uv run nse-alert login
 
-1. Create a paid Connect app at https://developers.kite.trade/ (~₹500/month for live data)
-2. Set KITE_API_KEY in .env
-3. Open the login URL (replace YOUR_API_KEY):
-   https://kite.zerodha.com/connect/login?v=3&api_key=YOUR_API_KEY
-4. After login, copy the request_token from the redirect URL
-5. Exchange it for an access_token:
-
-   python -c "from kiteconnect import KiteConnect; k=KiteConnect(api_key='YOUR_API_KEY'); print(k.generate_session('REQUEST_TOKEN', api_secret='YOUR_API_SECRET')['access_token'])"
-
-6. Put the access_token in KITE_ACCESS_TOKEN and set FEED_MODE=kite
+One-time setup:
+1. Paid Connect app at https://developers.kite.trade/
+2. .env: KITE_API_KEY=... and KITE_API_SECRET=...
+3. App Redirect URL: {redirect_url()}
+4. Each trading day: uv run nse-alert login
+   (or paste: uv run nse-alert set-token YOUR_ACCESS_TOKEN)
 """.strip()
     )
 
