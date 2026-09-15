@@ -18,6 +18,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/ALERTS.md](docs/ALERTS.md)** | Thresholds, F&O filter, ASM tags, EOD reports |
 | **[docs/LOGIN.md](docs/LOGIN.md)** | Daily Kite token (`login` / `set-token`) |
 | **[docs/ORDERS.md](docs/ORDERS.md)** | Dry-run / confirm / auto trading |
+| **[docs/TESTING_ORDERS.md](docs/TESTING_ORDERS.md)** | Order test cases + live handoff checklist |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Code layout and data flow |
 | **[docs/UPKEEP.md](docs/UPKEEP.md)** | How to keep docs accurate when code changes |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | How to read, change, and test this repo |

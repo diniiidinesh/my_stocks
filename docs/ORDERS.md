@@ -48,5 +48,6 @@ uv run nse-alert confirm ABC123
 ## Related
 
 - [ALERTS.md](ALERTS.md) — when alerts fire  
+- [TESTING_ORDERS.md](TESTING_ORDERS.md) — automated + live test cases  
 - [../deploy/CLOUD.md](../deploy/CLOUD.md) — static IP + whitelist  
 - Code: `orders.py`, `confirm_bot.py`

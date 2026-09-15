@@ -10,6 +10,7 @@ Use this checklist whenever you change behaviour users (or future-you) need to k
 | Alert rules (thresholds, F&O, ASM, report shape) | [ALERTS.md](ALERTS.md), short blurb in [../README.md](../README.md) |
 | Login / redirect / token flow | [LOGIN.md](LOGIN.md) — if **unchanged**, say so in the PR description |
 | Trading modes / SL / caps | [ORDERS.md](ORDERS.md), `.env.example` |
+| Order test plan / handoff checklist | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Deploy / ports / IP whitelist | [../deploy/CLOUD.md](../deploy/CLOUD.md) |
 | Provider cost / free tier advice | [../deploy/COST.md](../deploy/COST.md) |
 | New module or CLI command | [ARCHITECTURE.md](ARCHITECTURE.md), [../README.md](../README.md) CLI section, [README.md](README.md) index if new doc |
