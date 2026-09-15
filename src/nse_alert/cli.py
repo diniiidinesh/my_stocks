@@ -10,7 +10,13 @@ import click
 from nse_alert.config import Settings
 from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.feed import KiteFeed, MockFeed
-from nse_alert.notify import build_notifier
+from nse_alert.notify import TelegramNotifier, build_notifier
+from nse_alert.report import (
+    build_day_report,
+    format_day_report,
+    load_events,
+    write_day_report,
+)
 from nse_alert.universe import Instrument, build_universe
 
 logging.basicConfig(
@@ -183,8 +189,68 @@ def watch_cmd(
         price_feed.stop()
 
     logger.info("Done. Alerts fired this run: %d", alert_count["n"])
+    _emit_day_report(settings, telegram=settings.telegram_configured)
     if not use_kite and alert_count["n"] == 0:
         raise SystemExit(1)
+
+
+def _emit_day_report(settings: Settings, *, telegram: bool) -> None:
+    state_path = settings.state_dir / "fired.json"
+    events = load_events(state_path)
+    report = build_day_report(events)
+    text = format_day_report(report)
+    out_path = settings.state_dir / f"report-{report.report_date.isoformat()}.txt"
+    write_day_report(report, out_path)
+    click.echo("")
+    click.echo(text)
+    click.echo(f"\nSaved report: {out_path}")
+    if telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+        TelegramNotifier(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+        ).send_text(text)
+
+
+@main.command("report")
+@click.option(
+    "--date",
+    "report_date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Calendar day to report (default: today)",
+)
+@click.option(
+    "--telegram/--no-telegram",
+    default=False,
+    help="Also send the report to Telegram",
+)
+def report_cmd(report_date: object | None, telegram: bool) -> None:
+    """Show end-of-day summary: crossings per threshold and multi-level time gaps."""
+    from datetime import date as date_cls
+
+    settings = Settings()
+    day = (
+        report_date.date()  # type: ignore[attr-defined]
+        if report_date is not None
+        else date_cls.today()
+    )
+    state_path = settings.state_dir / "fired.json"
+    events = load_events(state_path, as_of=day)
+    report = build_day_report(events, report_date=day)
+    text = format_day_report(report)
+    out_path = settings.state_dir / f"report-{day.isoformat()}.txt"
+    write_day_report(report, out_path)
+    click.echo(text)
+    click.echo(f"\nSaved report: {out_path}")
+    if telegram and settings.telegram_bot_token and settings.telegram_chat_id:
+        TelegramNotifier(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+        ).send_text(text)
+    elif telegram:
+        raise click.ClickException(
+            "Telegram requested but TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are unset"
+        )
 
 
 def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:

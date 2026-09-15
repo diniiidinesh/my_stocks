@@ -86,6 +86,7 @@ nse-alert login [--port 8765]     # browser UI: Login with Kite OR paste token
 nse-alert set-token ACCESS_TOKEN  # paste token into .env (no browser)
 nse-alert watch [--threshold 4,7,11] [--feed mock|kite] [--max-ticks N]
 nse-alert universe [--min-turnover-cr 25] [--min-price 20]
+nse-alert report [--date YYYY-MM-DD] [--telegram]  # EOD crossings + time gaps
 nse-alert login-hint              # short reminder of the login setup
 ```
 
@@ -95,6 +96,7 @@ nse-alert login-hint              # short reminder of the login setup
 - Fires when `|change|` crosses each configured level (default **13**, or e.g. **4, 7, 11**)
 - **Once per symbol / direction / threshold per calendar day** (state in `.nse_alert/fired.json`)
 - A jump that skips levels (e.g. +3% → +12%) still fires each newly crossed level in order
+- When `watch` stops (Ctrl+C / end of mock run), an **end-of-day report** is printed and saved under `.nse_alert/report-YYYY-MM-DD.txt` — counts per threshold, plus time gaps between multi-level crossings (IST). Re-run anytime with `uv run nse-alert report` (add `--telegram` to push it).
 
 ## Project layout
 
@@ -104,6 +106,7 @@ src/nse_alert/
   config.py           # pydantic-settings / .env
   login_ui.py         # local browser UI for daily Kite token
   envfile.py          # .env read/write helpers
+  report.py           # end-of-day crossings + multi-level time gaps
   universe.py         # Kite instruments + quote liquidity screen
   feed.py             # MockFeed + KiteFeed (LTP)
   engine.py           # % move + dedupe

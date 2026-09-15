@@ -36,6 +36,7 @@ def test_alert_engine_fires_once(tmp_path: Path) -> None:
     data = state.read_text(encoding="utf-8")
     assert date.today().isoformat() in data
     assert "AAA|UP|13" in data
+    assert '"events"' in data
 
 
 def test_alert_engine_multiple_thresholds(tmp_path: Path) -> None:

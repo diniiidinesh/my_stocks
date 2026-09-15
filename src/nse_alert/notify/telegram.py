@@ -30,8 +30,6 @@ class TelegramNotifier:
         self._url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
     def send(self, alert: Alert) -> None:
-        import httpx
-
         arrow = "▲" if alert.direction == "UP" else "▼"
         text = (
             f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
@@ -40,23 +38,46 @@ class TelegramNotifier:
             f"Direction: {alert.direction}\n"
             f"Time (UTC): {alert.fired_at.strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        try:
-            resp = httpx.post(
-                self._url,
-                json={
-                    "chat_id": self.chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True,
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            logger.info("Telegram alert sent for %s", alert.symbol)
-        except httpx.HTTPError as exc:
-            logger.error("Telegram send failed for %s: %s", alert.symbol, exc)
-            # Always surface on console so a failed push is not silent.
-            ConsoleNotifier().send(alert)
+        self.send_text(text, parse_mode="Markdown")
+
+    def send_text(self, text: str, *, parse_mode: str | None = None) -> None:
+        import httpx
+
+        # Telegram hard limit is 4096 characters.
+        chunks = _chunk_text(text, 3500)
+        for chunk in chunks:
+            payload: dict[str, object] = {
+                "chat_id": self.chat_id,
+                "text": chunk,
+                "disable_web_page_preview": True,
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            try:
+                resp = httpx.post(self._url, json=payload, timeout=10.0)
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.error("Telegram send failed: %s", exc)
+                print(chunk, flush=True)
+
+
+def _chunk_text(text: str, limit: int) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in text.splitlines(keepends=True):
+        if size + len(line) > limit and current:
+            chunks.append("".join(current))
+            current = [line]
+            size = len(line)
+        else:
+            current.append(line)
+            size += len(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
 
 
 class MultiNotifier:

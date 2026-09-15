@@ -39,6 +39,33 @@ class Alert:
     threshold_pct: float
     fired_at: datetime
 
+    def to_event(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "ltp": self.ltp,
+            "prev_close": self.prev_close,
+            "change_pct": self.change_pct,
+            "direction": self.direction,
+            "threshold_pct": self.threshold_pct,
+            "fired_at": self.fired_at.isoformat(),
+        }
+
+
+def alert_from_event(data: dict[str, object]) -> Alert:
+    fired_raw = str(data["fired_at"])
+    fired_at = datetime.fromisoformat(fired_raw)
+    if fired_at.tzinfo is None:
+        fired_at = fired_at.replace(tzinfo=timezone.utc)
+    return Alert(
+        symbol=str(data["symbol"]),
+        ltp=float(data["ltp"]),
+        prev_close=float(data["prev_close"]),
+        change_pct=float(data["change_pct"]),
+        direction=str(data["direction"]),
+        threshold_pct=float(data["threshold_pct"]),
+        fired_at=fired_at,
+    )
+
 
 class AlertEngine:
     """Compute day % move and fire once per symbol/direction/threshold per day."""
@@ -57,6 +84,7 @@ class AlertEngine:
             self.thresholds = parse_thresholds(list(thresholds))
         self.state_path = state_path
         self._fired: set[str] = set()
+        self._events: list[dict[str, object]] = []
         self._load_state()
 
     def _today_key(self) -> str:
@@ -78,11 +106,21 @@ class AlertEngine:
         if data.get("date") != self._today_key():
             return
         self._fired = set(data.get("fired", []))
+        events = data.get("events", [])
+        if isinstance(events, list):
+            self._events = [e for e in events if isinstance(e, dict)]
 
     def _save_state(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"date": self._today_key(), "fired": sorted(self._fired)}
+        payload = {
+            "date": self._today_key(),
+            "fired": sorted(self._fired),
+            "events": self._events,
+        }
         self.state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def events(self) -> list[Alert]:
+        return [alert_from_event(e) for e in self._events]
 
     def on_tick(self, symbol: str, ltp: float) -> list[Alert]:
         """Return newly crossed threshold alerts for this tick (may be multiple)."""
@@ -114,6 +152,7 @@ class AlertEngine:
                 fired_at=now,
             )
             alerts.append(alert)
+            self._events.append(alert.to_event())
             logger.info(
                 "ALERT %s %s crossed ±%.4g%% (now %.2f%%) LTP=%.2f prev=%.2f",
                 alert.direction,
