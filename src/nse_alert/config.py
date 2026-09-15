@@ -32,17 +32,18 @@ class Settings(BaseSettings):
     custom_universe_file: str = Field(default="", alias="CUSTOM_UNIVERSE_FILE")
     state_dir: Path = Field(default=Path(".nse_alert"), alias="STATE_DIR")
 
-    # Trading (API orders) — keep TRADE_MODE=off until cloud static IP is ready
+    # Trading — test defaults: BUY only on +13%, SL 2% below entry
     trade_mode: str = Field(default="off", alias="TRADE_MODE")
     trade_qty: int = Field(default=1, alias="TRADE_QTY")
     trade_product: str = Field(default="CNC", alias="TRADE_PRODUCT")
     trade_order_type: str = Field(default="MARKET", alias="TRADE_ORDER_TYPE")
     trade_market_protection: int = Field(default=2, alias="TRADE_MARKET_PROTECTION")
-    trade_max_orders_per_day: int = Field(default=5, alias="TRADE_MAX_ORDERS_PER_DAY")
-    # Only place when this alert level is crossed (empty = every configured threshold)
-    trade_on_thresholds: str = Field(default="7", alias="TRADE_ON_THRESHOLDS")
-    # up = BUY on UP alerts only; down = SELL on DOWN; both = both
+    trade_max_orders_per_day: int = Field(default=3, alias="TRADE_MAX_ORDERS_PER_DAY")
+    # Only place when this alert level is crossed (test: 13)
+    trade_on_thresholds: str = Field(default="13", alias="TRADE_ON_THRESHOLDS")
+    # up = BUY on UP alerts only
     trade_sides: str = Field(default="up", alias="TRADE_SIDES")
+    trade_stop_loss_pct: float = Field(default=2.0, alias="TRADE_STOP_LOSS_PCT")
     trade_confirm_ttl_minutes: int = Field(default=30, alias="TRADE_CONFIRM_TTL_MINUTES")
 
     @property

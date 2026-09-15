@@ -93,22 +93,23 @@ nse-alert confirm ID              # confirm a pending order
 nse-alert login-hint
 ```
 
-## Orders (optional)
+## Orders (optional — test strategy)
 
-Set in `.env`:
+Test run defaults (keep it simple; expand later):
 
 ```env
+THRESHOLD_PCT=13
 TRADE_MODE=dry_run          # off | dry_run | confirm | auto
+TRADE_ON_THRESHOLDS=13      # BUY only on +13% UP alert
+TRADE_SIDES=up
+TRADE_STOP_LOSS_PCT=2       # SL-M sell trigger = entry × 0.98
 TRADE_QTY=1
 TRADE_PRODUCT=CNC
-TRADE_ON_THRESHOLDS=7       # only act when ±7% alert fires
-TRADE_SIDES=up              # BUY on UP alerts
-TRADE_MAX_ORDERS_PER_DAY=5
+TRADE_MAX_ORDERS_PER_DAY=3
 ```
 
-- `dry_run` — log/Telegram only, no real order (start here)
-- `confirm` — Telegram `CONFIRM abc123` (or `nse-alert confirm abc123`) then place
-- `auto` — place immediately (use only after cloud static IP is whitelisted)
+Flow: `+13% UP` → market BUY → place **SL-M SELL** at **2% below entry LTP**.
+One open position per symbol/day. Start with `dry_run`, then `confirm`.
 
 API **order** placement needs a **whitelisted static IP** (Zerodha / SEBI, from 1 Apr 2026). See [deploy/CLOUD.md](deploy/CLOUD.md).
 

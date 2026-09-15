@@ -164,11 +164,15 @@ def watch_cmd(
                 alert_symbol=alert.symbol,
                 alert_threshold=alert.threshold_pct,
                 alert_direction=alert.direction,
+                entry_ltp=alert.ltp,
                 ttl_minutes=settings.trade_confirm_ttl_minutes,
             )
+            stop_px = executor.stop_price_from_entry(alert.ltp)
             msg = (
                 f"CONFIRM ORDER `{pending.id}`\n"
                 f"{req.side} {req.quantity}x {req.symbol} ({req.product} {req.order_type})\n"
+                f"Entry≈`{alert.ltp:.2f}` → SL-M trigger≈`{stop_px:.2f}` "
+                f"(-{settings.trade_stop_loss_pct:g}%)\n"
                 f"Reason: {req.reason}\n\n"
                 f"Reply: `CONFIRM {pending.id}` or `CANCEL {pending.id}`\n"
                 f"Or: `uv run nse-alert confirm {pending.id}`"
@@ -180,8 +184,10 @@ def watch_cmd(
                 click.echo(msg)
             return
         if mode in {"dry_run", "auto"}:
-            result = executor.place(req)
-            note = f"TRADE [{result.mode}] {result.message}"
+            entry, sl = executor.place_entry_with_stop(req, entry_ltp=alert.ltp)
+            note = f"TRADE [{entry.mode}] {entry.message}"
+            if sl is not None:
+                note += f"\n{sl.message}"
             logger.info("%s", note)
             if tg:
                 tg.send_text(note)
@@ -282,6 +288,7 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
         max_orders_per_day=settings.trade_max_orders_per_day,
         trade_on_thresholds=settings.trade_threshold_list,
         trade_sides=settings.trade_sides,
+        stop_loss_pct=settings.trade_stop_loss_pct,
         book=book,
     )
 
@@ -313,16 +320,24 @@ def _confirm_pending(
         product=str(req_data["product"]),
         order_type=str(req_data["order_type"]),
         price=req_data.get("price"),  # type: ignore[arg-type]
+        trigger_price=req_data.get("trigger_price"),  # type: ignore[arg-type]
         market_protection=int(req_data.get("market_protection") or 2),
         tag=str(req_data.get("tag") or "nsealrt"),
         reason=str(req_data.get("reason") or "confirmed"),
     )
-    # Confirmed orders always go live (unless TRADE_MODE=dry_run globally).
     force = "dry_run" if executor.mode == "dry_run" else "auto"
-    result = executor.place(request, force_mode=force)
-    book.mark_pending(pending_id, "confirmed" if result.ok else "pending")
+    entry_ltp = float(item.entry_ltp or 0.0)
+    if entry_ltp <= 0:
+        entry_ltp = float(req_data.get("price") or 0.0) or 0.0
+    entry, sl = executor.place_entry_with_stop(
+        request, entry_ltp=entry_ltp or 0.01, force_mode=force
+    )
+    book.mark_pending(pending_id, "confirmed" if entry.ok else "pending")
+    msg = entry.message
+    if sl is not None:
+        msg += f"\n{sl.message}"
     if tg:
-        tg.send_text(result.message)
+        tg.send_text(msg)
 
 
 def _emit_day_report(settings: Settings, *, telegram: bool) -> None:
@@ -421,6 +436,7 @@ def order_cmd(side: str, symbol: str, qty: int | None, dry_run: bool) -> None:
         product=settings.trade_product,
         order_type=settings.trade_order_type,
         price=None,
+        trigger_price=None,
         market_protection=settings.trade_market_protection,
         tag="nsealrt",
         reason="manual CLI order",
