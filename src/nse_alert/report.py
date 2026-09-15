@@ -28,8 +28,12 @@ class DayReport:
     report_date: date
     events: list[Alert]
     counts_by_threshold: dict[float, int]
+    counts_by_threshold_direction: dict[float, dict[str, int]]
     counts_by_direction: dict[str, int]
     unique_symbols: int
+    unique_up_symbols: int
+    unique_down_symbols: int
+    asm_alert_count: int
     multi_level: list[tuple[str, str, list[Alert]]]
     gaps: list[ThresholdGap]
 
@@ -56,12 +60,23 @@ def build_day_report(events: list[Alert], *, report_date: date | None = None) ->
     day = report_date or date.today()
     counts_by_threshold: Counter[float] = Counter()
     counts_by_direction: Counter[str] = Counter()
+    thr_dir: dict[float, Counter[str]] = defaultdict(Counter)
     by_symbol_dir: dict[tuple[str, str], list[Alert]] = defaultdict(list)
+    up_symbols: set[str] = set()
+    down_symbols: set[str] = set()
+    asm_alert_count = 0
 
     for alert in events:
         counts_by_threshold[alert.threshold_pct] += 1
         counts_by_direction[alert.direction] += 1
+        thr_dir[alert.threshold_pct][alert.direction] += 1
         by_symbol_dir[(alert.symbol, alert.direction)].append(alert)
+        if alert.direction == "UP":
+            up_symbols.add(alert.symbol)
+        elif alert.direction == "DOWN":
+            down_symbols.add(alert.symbol)
+        if alert.is_asm:
+            asm_alert_count += 1
 
     multi_level: list[tuple[str, str, list[Alert]]] = []
     gaps: list[ThresholdGap] = []
@@ -83,12 +98,20 @@ def build_day_report(events: list[Alert], *, report_date: date | None = None) ->
                 )
             )
 
+    counts_by_threshold_direction = {
+        thr: dict(dirs) for thr, dirs in sorted(thr_dir.items())
+    }
+
     return DayReport(
         report_date=day,
         events=events,
         counts_by_threshold=dict(sorted(counts_by_threshold.items())),
+        counts_by_threshold_direction=counts_by_threshold_direction,
         counts_by_direction=dict(counts_by_direction),
         unique_symbols=len({a.symbol for a in events}),
+        unique_up_symbols=len(up_symbols),
+        unique_down_symbols=len(down_symbols),
+        asm_alert_count=asm_alert_count,
         multi_level=multi_level,
         gaps=gaps,
     )
@@ -127,17 +150,26 @@ def format_day_report(report: DayReport, *, max_gap_rows: int = 40) -> str:
     lines.append("")
     lines.append(f"Total alerts: {len(report.events)}")
     lines.append(f"Unique symbols: {report.unique_symbols}")
-    if report.counts_by_direction:
-        up = report.counts_by_direction.get("UP", 0)
-        down = report.counts_by_direction.get("DOWN", 0)
-        lines.append(f"Direction: UP={up}  DOWN={down}")
+    up_alerts = report.counts_by_direction.get("UP", 0)
+    down_alerts = report.counts_by_direction.get("DOWN", 0)
+    lines.append(
+        f"Positive movers (UP):   {report.unique_up_symbols} symbols, {up_alerts} alerts"
+    )
+    lines.append(
+        f"Negative movers (DOWN): {report.unique_down_symbols} symbols, {down_alerts} alerts"
+    )
+    if report.asm_alert_count:
+        lines.append(f"Alerts tagged ASM: {report.asm_alert_count}")
     lines.append("")
-    lines.append("Crossings by threshold:")
+    lines.append("Crossings by threshold (UP / DOWN):")
     if not report.counts_by_threshold:
         lines.append("  (none)")
     else:
-        for thr, count in report.counts_by_threshold.items():
-            lines.append(f"  ±{thr:g}%  →  {count}")
+        for thr, total in report.counts_by_threshold.items():
+            dirs = report.counts_by_threshold_direction.get(thr, {})
+            up = dirs.get("UP", 0)
+            down = dirs.get("DOWN", 0)
+            lines.append(f"  ±{thr:g}%  →  UP={up}  DOWN={down}  (total {total})")
 
     lines.append("")
     lines.append(

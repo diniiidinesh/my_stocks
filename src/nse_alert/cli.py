@@ -19,7 +19,8 @@ from nse_alert.report import (
     load_events,
     write_day_report,
 )
-from nse_alert.universe import Instrument, build_universe
+from nse_alert.surveillance import load_asm_symbols, load_nfo_equity_underlyings
+from nse_alert.universe import Instrument, build_universe, _kite_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,10 +126,36 @@ def watch_cmd(
     if not use_kite and state_path.exists():
         state_path.unlink()
 
+    fo_symbols: set[str] = set()
+    asm_symbols: set[str] = set()
+    fo_only = settings.fo_only_threshold_list
+    if use_kite:
+        kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+        if fo_only:
+            try:
+                fo_symbols = load_nfo_equity_underlyings(kite)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not load NFO underlyings (%s); FO-only thresholds disabled",
+                    exc,
+                )
+                fo_only = []
+        asm_symbols = load_asm_symbols(
+            url=settings.asm_sheet_url,
+            cache_path=settings.state_dir / "asm_symbols.txt",
+            enabled=settings.asm_enabled,
+        )
+    else:
+        # Mock: treat all demo symbols as F&O so FO-only levels still exercise.
+        fo_symbols = {i.symbol for i in instruments}
+
     engine = AlertEngine(
         prev_closes=prev_closes,
         thresholds=thresholds,
         state_path=state_path,
+        fo_symbols=fo_symbols,
+        fo_only_thresholds=fo_only,
+        asm_symbols=asm_symbols,
     )
     notifier = build_notifier(
         telegram_bot_token=settings.telegram_bot_token,
@@ -199,10 +226,15 @@ def watch_cmd(
             _handle_trade(alert)
 
     threshold_label = ",".join(f"{t:g}" for t in thresholds)
+    fo_only_label = ",".join(f"{t:g}" for t in fo_only) if fo_only else "none"
     logger.info(
-        "Watching %d symbols | thresholds=±%s%% | feed=%s | telegram=%s | trade=%s",
+        "Watching %d symbols | thresholds=±%s%% | fo_only=±%s%% (%d F&O) | "
+        "asm=%d | feed=%s | telegram=%s | trade=%s",
         len(instruments),
         threshold_label,
+        fo_only_label,
+        len(fo_symbols),
+        len(asm_symbols),
         feed_mode,
         "yes" if settings.telegram_configured else "console-only",
         executor.mode,

@@ -17,7 +17,12 @@ class Settings(BaseSettings):
     )
 
     # Comma-separated list, e.g. "4,7,11" or a single value "13"
-    threshold_pct: str = Field(default="13", alias="THRESHOLD_PCT")
+    threshold_pct: str = Field(default="4,7,11,13", alias="THRESHOLD_PCT")
+    # Thresholds that apply only to NSE F&O underlyings (cash EQ with futures)
+    fo_only_thresholds: str = Field(default="4", alias="FO_ONLY_THRESHOLDS")
+    # Tag ASM names in alerts using Zerodha RMS sheet (not a Kite API)
+    asm_enabled: bool = Field(default=True, alias="ASM_ENABLED")
+    asm_sheet_url: str = Field(default="", alias="ASM_SHEET_URL")
     min_turnover_cr: float = Field(default=25.0, alias="MIN_TURNOVER_CR")
     min_price: float = Field(default=20.0, alias="MIN_PRICE")
     feed_mode: str = Field(default="mock", alias="FEED_MODE")
@@ -49,6 +54,13 @@ class Settings(BaseSettings):
     @property
     def thresholds(self) -> list[float]:
         return parse_thresholds(self.threshold_pct)
+
+    @property
+    def fo_only_threshold_list(self) -> list[float]:
+        text = self.fo_only_thresholds.strip()
+        if not text:
+            return []
+        return parse_thresholds(text)
 
     @property
     def trade_threshold_list(self) -> list[float]:

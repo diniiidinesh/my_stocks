@@ -81,6 +81,40 @@ def test_up_and_down_thresholds_are_independent(tmp_path: Path) -> None:
     assert len(down) == 1 and down[0].direction == "DOWN"
 
 
+def test_fo_only_threshold_skips_non_fno(tmp_path: Path) -> None:
+    engine = AlertEngine(
+        prev_closes={"CASHONLY": 100.0, "RELIANCE": 100.0},
+        thresholds=[4, 7],
+        state_path=tmp_path / "fired.json",
+        fo_symbols={"RELIANCE"},
+        fo_only_thresholds={4},
+    )
+    # Non-F&O at +5%: skip 4%, no 7% yet
+    assert engine.on_tick("CASHONLY", 105.0) == []
+    # Non-F&O at +8%: only 7%
+    cash = engine.on_tick("CASHONLY", 108.0)
+    assert [a.threshold_pct for a in cash] == [7.0]
+    assert cash[0].is_fno is False
+
+    # F&O at +5%: fires 4%
+    fo = engine.on_tick("RELIANCE", 105.0)
+    assert len(fo) == 1
+    assert fo[0].threshold_pct == 4.0
+    assert fo[0].is_fno is True
+
+
+def test_asm_tag_on_alert(tmp_path: Path) -> None:
+    engine = AlertEngine(
+        prev_closes={"XYZ": 100.0},
+        thresholds=[4],
+        state_path=tmp_path / "fired.json",
+        asm_symbols={"XYZ"},
+    )
+    alerts = engine.on_tick("XYZ", 105.0)
+    assert len(alerts) == 1
+    assert alerts[0].is_asm is True
+
+
 def test_mainboard_equity_symbol_filter() -> None:
     assert _is_mainboard_equity_symbol("RELIANCE")
     assert _is_mainboard_equity_symbol("M&M")

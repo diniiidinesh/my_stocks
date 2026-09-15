@@ -12,6 +12,10 @@ Not the full NSE list and not F&O-only. Default **live** universe (Kite only —
 
 Override with `CUSTOM_UNIVERSE_FILE` (one ticker per line) for a fixed list (still quoted via Kite when live). **Recommended** for first live runs — use `universes/liquid_sample.txt` so you don’t quote the entire cash market (large `quote` URLs often hit Cloudflare).
 
+**±4% alerts** apply only to **NSE F&O underlyings** (derived from `kite.instruments("NFO")` futures). Higher levels (7 / 11 / 13) apply to the full watchlist. Configure with `FO_ONLY_THRESHOLDS=4`.
+
+**ASM** is **not** in the Kite API. When `ASM_ENABLED=true`, the app tags alerts using Zerodha’s public RMS spreadsheet (Utilities → consolidated scrips). Login / access-token flow is unchanged.
+
 ## Quick start (mock — no credentials)
 
 ```bash
@@ -54,7 +58,9 @@ cp .env.example .env
 4. Set alert levels in `.env` (comma-separated):
 
 ```env
-THRESHOLD_PCT=4,7,11
+THRESHOLD_PCT=4,7,11,13
+FO_ONLY_THRESHOLDS=4
+ASM_ENABLED=true
 ```
 
 5. Run during market hours:

@@ -8,16 +8,27 @@ from nse_alert.engine import Alert
 logger = logging.getLogger(__name__)
 
 
+def _alert_tags(alert: Alert) -> str:
+    tags: list[str] = []
+    if alert.is_fno:
+        tags.append("F&O")
+    if alert.is_asm:
+        tags.append("ASM")
+    return " · ".join(tags)
+
+
 class Notifier(Protocol):
     def send(self, alert: Alert) -> None: ...
 
 
 class ConsoleNotifier:
     def send(self, alert: Alert) -> None:
+        tags = _alert_tags(alert)
+        tag_note = f" {tags}" if tags else ""
         print(
             f"[ALERT] {alert.direction} {alert.symbol} "
             f"{alert.change_pct:+.2f}% (crossed ±{alert.threshold_pct:g}%) "
-            f"LTP={alert.ltp:.2f} prev={alert.prev_close:.2f} "
+            f"LTP={alert.ltp:.2f} prev={alert.prev_close:.2f}{tag_note} "
             f"@ {alert.fired_at.isoformat()}",
             flush=True,
         )
@@ -31,11 +42,14 @@ class TelegramNotifier:
 
     def send(self, alert: Alert) -> None:
         arrow = "▲" if alert.direction == "UP" else "▼"
+        tags = _alert_tags(alert)
+        tag_line = f"\nTags: *{tags}*" if tags else ""
         text = (
             f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
             f"(crossed ±{alert.threshold_pct:g}%)\n"
             f"LTP: `{alert.ltp:.2f}` | Prev close: `{alert.prev_close:.2f}`\n"
-            f"Direction: {alert.direction}\n"
+            f"Direction: {alert.direction}"
+            f"{tag_line}\n"
             f"Time (UTC): {alert.fired_at.strftime('%Y-%m-%d %H:%M:%S')}"
         )
         self.send_text(text, parse_mode="Markdown")

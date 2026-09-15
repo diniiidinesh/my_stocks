@@ -27,19 +27,25 @@ def test_day_report_counts_and_gaps() -> None:
         Alert("AAA", 105, 100, 5.0, "UP", 4.0, t0),
         Alert("AAA", 108, 100, 8.0, "UP", 7.0, t0 + timedelta(minutes=12)),
         Alert("AAA", 112, 100, 12.0, "UP", 11.0, t0 + timedelta(minutes=40)),
-        Alert("BBB", 86, 100, -14.0, "DOWN", 11.0, t0 + timedelta(hours=1)),
+        Alert("BBB", 86, 100, -14.0, "DOWN", 11.0, t0 + timedelta(hours=1), is_asm=True),
     ]
     report = build_day_report(events, report_date=date(2026, 9, 15))
     assert report.counts_by_threshold == {4.0: 1, 7.0: 1, 11.0: 2}
+    assert report.counts_by_threshold_direction[11.0] == {"UP": 1, "DOWN": 1}
     assert report.unique_symbols == 2
+    assert report.unique_up_symbols == 1
+    assert report.unique_down_symbols == 1
+    assert report.asm_alert_count == 1
     assert len(report.multi_level) == 1
     assert len(report.gaps) == 2
     assert report.gaps[0].gap == timedelta(minutes=12)
     assert report.gaps[1].gap == timedelta(minutes=28)
 
     text = format_day_report(report)
-    assert "±4%  →  1" in text
-    assert "±7%  →  1" in text
-    assert "±11%  →  2" in text
+    assert "Positive movers (UP):   1 symbols, 3 alerts" in text
+    assert "Negative movers (DOWN): 1 symbols, 1 alerts" in text
+    assert "±4%  →  UP=1  DOWN=0  (total 1)" in text
+    assert "±11%  →  UP=1  DOWN=1  (total 2)" in text
+    assert "Alerts tagged ASM: 1" in text
     assert "AAA UP" in text
     assert "12m" in text

@@ -38,6 +38,8 @@ class Alert:
     direction: str
     threshold_pct: float
     fired_at: datetime
+    is_asm: bool = False
+    is_fno: bool = False
 
     def to_event(self) -> dict[str, object]:
         return {
@@ -48,6 +50,8 @@ class Alert:
             "direction": self.direction,
             "threshold_pct": self.threshold_pct,
             "fired_at": self.fired_at.isoformat(),
+            "is_asm": self.is_asm,
+            "is_fno": self.is_fno,
         }
 
 
@@ -64,6 +68,8 @@ def alert_from_event(data: dict[str, object]) -> Alert:
         direction=str(data["direction"]),
         threshold_pct=float(data["threshold_pct"]),
         fired_at=fired_at,
+        is_asm=bool(data.get("is_asm", False)),
+        is_fno=bool(data.get("is_fno", False)),
     )
 
 
@@ -76,6 +82,9 @@ class AlertEngine:
         prev_closes: dict[str, float],
         thresholds: list[float] | float,
         state_path: Path,
+        fo_symbols: set[str] | None = None,
+        fo_only_thresholds: list[float] | set[float] | None = None,
+        asm_symbols: set[str] | None = None,
     ) -> None:
         self.prev_closes = prev_closes
         if isinstance(thresholds, (int, float)):
@@ -83,10 +92,22 @@ class AlertEngine:
         else:
             self.thresholds = parse_thresholds(list(thresholds))
         self.state_path = state_path
+        self.fo_symbols = {s.upper() for s in (fo_symbols or set())}
+        self.fo_only_thresholds = {
+            float(t) for t in (fo_only_thresholds or [])
+        }
+        self.asm_symbols = {s.upper() for s in (asm_symbols or set())}
         self._fired: set[str] = set()
         self._events: list[dict[str, object]] = []
         self._load_state()
 
+    def _thresholds_for(self, symbol: str) -> list[float]:
+        """Thresholds applicable to this symbol (e.g. ±4% only for F&O names)."""
+        if not self.fo_only_thresholds:
+            return self.thresholds
+        if symbol.upper() in self.fo_symbols:
+            return self.thresholds
+        return [t for t in self.thresholds if t not in self.fo_only_thresholds]
     def _today_key(self) -> str:
         return date.today().isoformat()
 
@@ -127,15 +148,20 @@ class AlertEngine:
         prev = self.prev_closes.get(symbol)
         if prev is None or prev <= 0 or ltp <= 0:
             return []
+        applicable = self._thresholds_for(symbol)
+        if not applicable:
+            return []
         change_pct = (ltp / prev - 1.0) * 100.0
         abs_move = abs(change_pct)
-        if abs_move < self.thresholds[0]:
+        if abs_move < applicable[0]:
             return []
 
         direction = "UP" if change_pct > 0 else "DOWN"
         now = datetime.now(timezone.utc)
+        is_asm = symbol.upper() in self.asm_symbols
+        is_fno = symbol.upper() in self.fo_symbols
         alerts: list[Alert] = []
-        for threshold in self.thresholds:
+        for threshold in applicable:
             if abs_move < threshold:
                 break
             key = self._fired_key(symbol, direction, threshold)
@@ -150,17 +176,26 @@ class AlertEngine:
                 direction=direction,
                 threshold_pct=threshold,
                 fired_at=now,
+                is_asm=is_asm,
+                is_fno=is_fno,
             )
             alerts.append(alert)
             self._events.append(alert.to_event())
+            tags = []
+            if is_fno:
+                tags.append("F&O")
+            if is_asm:
+                tags.append("ASM")
+            tag_note = f" [{' '.join(tags)}]" if tags else ""
             logger.info(
-                "ALERT %s %s crossed ±%.4g%% (now %.2f%%) LTP=%.2f prev=%.2f",
+                "ALERT %s %s crossed ±%.4g%% (now %.2f%%) LTP=%.2f prev=%.2f%s",
                 alert.direction,
                 alert.symbol,
                 alert.threshold_pct,
                 alert.change_pct,
                 alert.ltp,
                 alert.prev_close,
+                tag_note,
             )
 
         if alerts:
