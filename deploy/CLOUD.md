@@ -33,7 +33,23 @@ You do **not** need a big AWS footprint. A ₹500–1500/mo VPS with a fixed IP 
 
 Optional: make the IP sticky via **Networking → IP Management → Reserved public IPs** and attach it (so whitelist doesn’t break if you recreate the VM).
 
-## One-time AWS checklist
+## One-time AWS Lightsail checklist (recommended)
+
+1. Open [Lightsail](https://lightsail.aws.amazon.com/) → set region **Mumbai (ap-south-1)** (top-right).
+2. **Create instance**:
+   - Platform: **Linux/Unix**
+   - Blueprint: **OS Only → Ubuntu 24.04** (or 22.04)
+   - Plan: **$5** or **$7** (1 GB RAM)
+   - Name: `nse-alert`
+3. Wait until status is **Running**.
+4. Instance → **Networking** → **Create static IP** → attach to `nse-alert` → note the IP.
+5. **Networking → IPv4 firewall**: keep **SSH (22)**; optionally restrict to your home IP. Do **not** open 8765 yet.
+6. Connect: use Lightsail **browser SSH**, or download the default key / use your own key:
+   `ssh -i ~/.ssh/lightsail.pem ubuntu@STATIC_IP`
+7. On [developers.kite.trade](https://developers.kite.trade) → **Profile → IP Whitelist**, add the **static IP**.
+8. On the VM, follow **Install on the VM** below.
+
+## One-time AWS EC2 checklist (optional; Lightsail is simpler)
 
 1. Launch Ubuntu 22.04+ in **Mumbai**.
 2. Allocate an **Elastic IP** and associate it to the instance.
