@@ -7,7 +7,7 @@ import pytest
 
 from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.notify import ConsoleNotifier, build_notifier
-from nse_alert.universe import Instrument, build_universe
+from nse_alert.universe import Instrument, build_universe, _is_mainboard_equity_symbol
 
 
 def test_parse_thresholds_csv() -> None:
@@ -78,6 +78,15 @@ def test_up_and_down_thresholds_are_independent(tmp_path: Path) -> None:
     assert len(up) == 1 and up[0].direction == "UP"
     down = engine.on_tick("CCC", 95.0)
     assert len(down) == 1 and down[0].direction == "DOWN"
+
+
+def test_mainboard_equity_symbol_filter() -> None:
+    assert _is_mainboard_equity_symbol("RELIANCE")
+    assert _is_mainboard_equity_symbol("M&M")
+    assert _is_mainboard_equity_symbol("YESBANK-BE")
+    assert not _is_mainboard_equity_symbol("672KL27-SG")
+    assert not _is_mainboard_equity_symbol("SGBMAY29I-GB")
+    assert not _is_mainboard_equity_symbol("IIFLZC28-NG")
 
 
 def test_mock_universe_contains_demo() -> None:

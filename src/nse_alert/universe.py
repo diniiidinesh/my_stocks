@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -8,6 +9,14 @@ from typing import Any
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Equity series suffixes we keep. Everything else with a hyphen is usually
+# G-Sec / SDL / bond / ETF / SME / rights, etc.
+_EQUITY_SERIES = frozenset({"BE", "BZ"})
+_NON_EQUITY_HINT = re.compile(
+    r"(SGB|GOI|BOND|GSEC|SDL|INVIT|REIT|ETF|BEES|IETF|NIFTY|SENSEX)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +50,21 @@ def _kite_client(api_key: str, access_token: str) -> Any:
     return kite
 
 
+def _is_mainboard_equity_symbol(symbol: str) -> bool:
+    """Keep cash equities; drop bonds, G-Secs, most ETFs, SME, etc."""
+    symbol = symbol.strip().upper()
+    if not symbol or symbol[0].isdigit():
+        return False
+    if "-" not in symbol:
+        return bool(re.fullmatch(r"[A-Z0-9&]+", symbol))
+    base, series = symbol.rsplit("-", 1)
+    if series not in _EQUITY_SERIES:
+        return False
+    return bool(re.fullmatch(r"[A-Z0-9&]+", base))
+
+
 def load_nse_eq_instruments(kite: Any) -> pd.DataFrame:
-    """All NSE cash EQ instruments from Kite's instrument dump."""
+    """NSE mainboard cash equities from Kite's instrument dump."""
     instruments = kite.instruments("NSE")
     df = pd.DataFrame(instruments)
     if df.empty:
@@ -53,18 +75,60 @@ def load_nse_eq_instruments(kite: Any) -> pd.DataFrame:
         & (df["exchange"] == "NSE")
     ].copy()
     df["tradingsymbol"] = df["tradingsymbol"].astype(str).str.strip()
+    before = len(df)
+    df = df[df["tradingsymbol"].map(_is_mainboard_equity_symbol)].copy()
+    # Drop obvious non-stock names still tagged EQ in the dump.
+    names = df["name"].fillna("").astype(str)
+    df = df[~names.map(lambda n: bool(_NON_EQUITY_HINT.search(n)))].copy()
+    logger.info(
+        "NSE EQ instruments: %d raw → %d mainboard cash (filtered %d)",
+        before,
+        len(df),
+        before - len(df),
+    )
+    if df.empty:
+        raise RuntimeError("No mainboard NSE EQ symbols left after filters")
     return df
 
 
 def _quote_batches(kite: Any, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """Quote in small batches — large GET URLs trigger Cloudflare HTML pages."""
+    from kiteconnect.exceptions import DataException, NetworkException
+
     quote_map: dict[str, dict[str, Any]] = {}
-    batch_size = 250
-    for i in range(0, len(symbols), batch_size):
-        keys = [f"NSE:{s}" for s in symbols[i : i + batch_size]]
-        quote_map.update(kite.quote(keys))
-        # Quote limit is ~1 req/sec; pause between full-universe batches.
-        if i + batch_size < len(symbols):
-            time.sleep(0.35)
+    batch_size = 40  # keep query string short
+    total = len(symbols)
+    for i in range(0, total, batch_size):
+        chunk = symbols[i : i + batch_size]
+        keys = [f"NSE:{s}" for s in chunk]
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                quote_map.update(kite.quote(keys))
+                last_exc = None
+                break
+            except (DataException, NetworkException) as exc:
+                last_exc = exc
+                wait = attempt * 1.5
+                logger.warning(
+                    "Kite quote batch %d–%d failed (attempt %d/3): %s — retry in %.1fs",
+                    i + 1,
+                    i + len(chunk),
+                    attempt,
+                    type(exc).__name__,
+                    wait,
+                )
+                time.sleep(wait)
+        if last_exc is not None:
+            raise RuntimeError(
+                "Kite quote API returned a non-JSON response (often Cloudflare). "
+                "Use a smaller list via CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt "
+                "instead of scanning the whole market."
+            ) from last_exc
+        if i + batch_size < total:
+            time.sleep(0.9)  # stay under ~1 req/sec
+        if (i // batch_size) % 10 == 0:
+            logger.info("Quoted %d / %d symbols…", min(i + batch_size, total), total)
     return quote_map
 
 
@@ -75,20 +139,22 @@ def _build_from_kite_quotes(
     min_price: float,
     symbols_filter: list[str] | None = None,
 ) -> list[Instrument]:
-    """Screen and build the watchlist entirely from Kite instruments + quotes.
-
-    Liquidity proxy: session ``volume * last_price`` (₹), compared to
-    ``min_turnover_cr``. Prev close comes from quote OHLC.
-    """
+    """Screen and build the watchlist from Kite instruments + quotes."""
     nse = load_nse_eq_instruments(kite)
     if symbols_filter is not None:
         wanted = {s.upper() for s in symbols_filter}
         nse = nse[nse["tradingsymbol"].isin(wanted)].copy()
+        missing = wanted - set(nse["tradingsymbol"])
+        if missing:
+            logger.warning("Custom symbols not in Kite NSE EQ list: %s", sorted(missing)[:20])
         if nse.empty:
             raise RuntimeError("No overlap between custom universe and Kite NSE EQ list")
 
     symbols = nse["tradingsymbol"].tolist()
-    logger.info("Quoting %d NSE EQ symbols via Kite for liquidity screen", len(symbols))
+    logger.info(
+        "Quoting %d NSE cash symbols via Kite for liquidity screen",
+        len(symbols),
+    )
     quote_map = _quote_batches(kite, symbols)
 
     token_by_symbol = dict(
@@ -106,8 +172,7 @@ def _build_from_kite_quotes(
         )
     )
 
-    min_turnover = min_turnover_cr * 1e7  # crore → rupees
-    # Custom lists skip the liquidity floor (user chose the names explicitly).
+    min_turnover = min_turnover_cr * 1e7
     apply_liquidity = symbols_filter is None
     instruments: list[Instrument] = []
 
@@ -141,7 +206,8 @@ def _build_from_kite_quotes(
     if not instruments:
         raise RuntimeError(
             "Kite universe is empty after filters. "
-            "Lower MIN_TURNOVER_CR / MIN_PRICE, or set CUSTOM_UNIVERSE_FILE."
+            "Lower MIN_TURNOVER_CR / MIN_PRICE, or set CUSTOM_UNIVERSE_FILE "
+            "(see universes/liquid_sample.txt)."
         )
     logger.info(
         "Universe ready from Kite: %d instruments (turnover>=%.1f Cr, price>=%.1f)",

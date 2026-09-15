@@ -10,7 +10,7 @@ Not the full NSE list and not F&O-only. Default **live** universe (Kite only —
 2. Session turnover proxy `volume × LTP` ≥ **₹25 crore** (`MIN_TURNOVER_CR`)
 3. Prev close / price ≥ **₹20** (`MIN_PRICE`)
 
-Override with `CUSTOM_UNIVERSE_FILE` (one ticker per line) for a fixed list (still quoted via Kite when live).
+Override with `CUSTOM_UNIVERSE_FILE` (one ticker per line) for a fixed list (still quoted via Kite when live). **Recommended** for first live runs — use `universes/liquid_sample.txt` so you don’t quote the entire cash market (large `quote` URLs often hit Cloudflare).
 
 ## Quick start (mock — no credentials)
 
