@@ -30,7 +30,7 @@ def main() -> None:
 @click.option("--min-turnover-cr", type=float, default=None, help="Min prior-day turnover in ₹ crore")
 @click.option("--min-price", type=float, default=None, help="Min close price filter")
 def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None:
-    """Print the liquidity-screened intraday universe (mock or live bhavcopy)."""
+    """Print the liquidity-screened universe (mock, or Kite instruments + quotes)."""
     settings = Settings()
     tovr = min_turnover_cr if min_turnover_cr is not None else settings.min_turnover_cr
     price = min_price if min_price is not None else settings.min_price

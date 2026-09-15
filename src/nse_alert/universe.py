@@ -1,30 +1,13 @@
 from __future__ import annotations
 
-import io
 import logging
+import time
 from dataclasses import dataclass
-from datetime import date, timedelta
 from typing import Any
 
-import httpx
 import pandas as pd
 
 logger = logging.getLogger(__name__)
-
-NSE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "*/*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.nseindia.com/",
-}
-
-BHAVCOPY_URL = (
-    "https://nsearchives.nseindia.com/products/content/"
-    "sec_bhavdata_full_{ddmmyyyy}.csv"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,85 +18,6 @@ class Instrument:
     last_price: float
     prev_close: float
     turnover_cr: float
-
-
-def _session() -> httpx.Client:
-    client = httpx.Client(headers=NSE_HEADERS, timeout=30.0, follow_redirects=True)
-    # Warm cookies; NSE often requires a home hit first.
-    try:
-        client.get("https://www.nseindia.com")
-    except httpx.HTTPError as exc:
-        logger.debug("NSE cookie warmup failed: %s", exc)
-    return client
-
-
-def fetch_bhavcopy(as_of: date | None = None) -> pd.DataFrame:
-    """Download NSE full bhavcopy for the most recent available session."""
-    start = as_of or date.today()
-    with _session() as client:
-        for offset in range(0, 10):
-            day = start - timedelta(days=offset)
-            if day.weekday() >= 5:
-                continue
-            url = BHAVCOPY_URL.format(ddmmyyyy=day.strftime("%d%m%Y"))
-            try:
-                resp = client.get(url)
-            except httpx.HTTPError as exc:
-                logger.warning("bhavcopy request failed for %s: %s", day, exc)
-                continue
-            if resp.status_code != 200:
-                continue
-            text = resp.text
-            if "SYMBOL" not in text[:200].upper():
-                continue
-            df = pd.read_csv(io.StringIO(text))
-            df.columns = [c.strip().upper() for c in df.columns]
-            logger.info("Loaded NSE bhavcopy for %s (%d rows)", day.isoformat(), len(df))
-            return df
-    raise RuntimeError(
-        "Could not download NSE bhavcopy for the last ~10 calendar days. "
-        "Check network access to nsearchives.nseindia.com or use CUSTOM_UNIVERSE_FILE."
-    )
-
-
-def _normalize_bhav(df: pd.DataFrame) -> pd.DataFrame:
-    symbol_col = "SYMBOL" if "SYMBOL" in df.columns else df.columns[0]
-    series_col = next((c for c in df.columns if "SERIES" in c), None)
-    close_col = next(
-        (c for c in ("CLOSE_PRICE", "CLOSE", "CLS_PRIC") if c in df.columns), None
-    )
-    turnover_col = next(
-        (
-            c
-            for c in ("TTL_TRD_VALN", "TOTTRDVAL", "TURNOVER", "TTL_TRD_VAL")
-            if c in df.columns
-        ),
-        None,
-    )
-    if close_col is None or turnover_col is None:
-        raise RuntimeError(
-            f"Unexpected bhavcopy columns: {list(df.columns)}. "
-            "Need close and turnover fields."
-        )
-
-    out = pd.DataFrame(
-        {
-            "symbol": df[symbol_col].astype(str).str.strip(),
-            "series": (
-                df[series_col].astype(str).str.strip().str.upper()
-                if series_col
-                else "EQ"
-            ),
-            "close": pd.to_numeric(df[close_col], errors="coerce"),
-            "turnover": pd.to_numeric(df[turnover_col], errors="coerce"),
-        }
-    )
-    out = out.dropna(subset=["symbol", "close", "turnover"])
-    # Prefer EQ series for intraday cash.
-    out = out[out["series"].isin(["EQ", "BE", "SM"])]
-    out = out.sort_values(["symbol", "series"]).drop_duplicates("symbol", keep="first")
-    out = out[out["series"] == "EQ"]
-    return out
 
 
 def load_custom_universe(path: str) -> list[str]:
@@ -129,26 +33,6 @@ def load_custom_universe(path: str) -> list[str]:
     return symbols
 
 
-def screen_liquid_symbols(
-    min_turnover_cr: float,
-    min_price: float,
-    bhav: pd.DataFrame | None = None,
-) -> pd.DataFrame:
-    """Return liquid EQ symbols from prior-session bhavcopy."""
-    raw = bhav if bhav is not None else fetch_bhavcopy()
-    df = _normalize_bhav(raw)
-    min_turnover = min_turnover_cr * 1e7  # crore → rupees
-    screened = df[(df["turnover"] >= min_turnover) & (df["close"] >= min_price)].copy()
-    screened["turnover_cr"] = screened["turnover"] / 1e7
-    logger.info(
-        "Liquidity screen: %d symbols (turnover>=%.1f Cr, price>=%.1f)",
-        len(screened),
-        min_turnover_cr,
-        min_price,
-    )
-    return screened.reset_index(drop=True)
-
-
 def _kite_client(api_key: str, access_token: str) -> Any:
     from kiteconnect import KiteConnect
 
@@ -158,6 +42,7 @@ def _kite_client(api_key: str, access_token: str) -> Any:
 
 
 def load_nse_eq_instruments(kite: Any) -> pd.DataFrame:
+    """All NSE cash EQ instruments from Kite's instrument dump."""
     instruments = kite.instruments("NSE")
     df = pd.DataFrame(instruments)
     if df.empty:
@@ -171,6 +56,102 @@ def load_nse_eq_instruments(kite: Any) -> pd.DataFrame:
     return df
 
 
+def _quote_batches(kite: Any, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    quote_map: dict[str, dict[str, Any]] = {}
+    batch_size = 250
+    for i in range(0, len(symbols), batch_size):
+        keys = [f"NSE:{s}" for s in symbols[i : i + batch_size]]
+        quote_map.update(kite.quote(keys))
+        # Quote limit is ~1 req/sec; pause between full-universe batches.
+        if i + batch_size < len(symbols):
+            time.sleep(0.35)
+    return quote_map
+
+
+def _build_from_kite_quotes(
+    kite: Any,
+    *,
+    min_turnover_cr: float,
+    min_price: float,
+    symbols_filter: list[str] | None = None,
+) -> list[Instrument]:
+    """Screen and build the watchlist entirely from Kite instruments + quotes.
+
+    Liquidity proxy: session ``volume * last_price`` (₹), compared to
+    ``min_turnover_cr``. Prev close comes from quote OHLC.
+    """
+    nse = load_nse_eq_instruments(kite)
+    if symbols_filter is not None:
+        wanted = {s.upper() for s in symbols_filter}
+        nse = nse[nse["tradingsymbol"].isin(wanted)].copy()
+        if nse.empty:
+            raise RuntimeError("No overlap between custom universe and Kite NSE EQ list")
+
+    symbols = nse["tradingsymbol"].tolist()
+    logger.info("Quoting %d NSE EQ symbols via Kite for liquidity screen", len(symbols))
+    quote_map = _quote_batches(kite, symbols)
+
+    token_by_symbol = dict(
+        zip(
+            nse["tradingsymbol"].tolist(),
+            nse["instrument_token"].astype(int).tolist(),
+            strict=True,
+        )
+    )
+    name_by_symbol = dict(
+        zip(
+            nse["tradingsymbol"].tolist(),
+            nse["name"].fillna("").astype(str).tolist(),
+            strict=True,
+        )
+    )
+
+    min_turnover = min_turnover_cr * 1e7  # crore → rupees
+    # Custom lists skip the liquidity floor (user chose the names explicitly).
+    apply_liquidity = symbols_filter is None
+    instruments: list[Instrument] = []
+
+    for symbol in symbols:
+        q = quote_map.get(f"NSE:{symbol}", {})
+        ohlc = q.get("ohlc") or {}
+        prev_close = float(ohlc.get("close") or 0.0)
+        last_price = float(q.get("last_price") or prev_close or 0.0)
+        volume = float(q.get("volume") or 0.0)
+        turnover = volume * last_price if volume and last_price else 0.0
+        turnover_cr = turnover / 1e7
+
+        if prev_close <= 0:
+            continue
+        if prev_close < min_price:
+            continue
+        if apply_liquidity and turnover < min_turnover:
+            continue
+
+        instruments.append(
+            Instrument(
+                symbol=symbol,
+                instrument_token=int(token_by_symbol[symbol]),
+                name=name_by_symbol.get(symbol) or symbol,
+                last_price=last_price,
+                prev_close=prev_close,
+                turnover_cr=float(turnover_cr),
+            )
+        )
+
+    if not instruments:
+        raise RuntimeError(
+            "Kite universe is empty after filters. "
+            "Lower MIN_TURNOVER_CR / MIN_PRICE, or set CUSTOM_UNIVERSE_FILE."
+        )
+    logger.info(
+        "Universe ready from Kite: %d instruments (turnover>=%.1f Cr, price>=%.1f)",
+        len(instruments),
+        min_turnover_cr if apply_liquidity else 0.0,
+        min_price,
+    )
+    return instruments
+
+
 def build_universe(
     *,
     min_turnover_cr: float,
@@ -180,13 +161,12 @@ def build_universe(
     custom_universe_file: str = "",
     mock: bool = False,
 ) -> list[Instrument]:
-    """Build the intraday-liquid watchlist.
+    """Build the intraday watchlist.
 
-    In mock mode, returns a small synthetic set without network/Kite.
-    With Kite credentials, maps screened symbols to instrument tokens and
-    previous closes from quote OHLC.
-    Without Kite (but not mock), returns screened symbols with token=0 and
-    prev_close from bhavcopy — useful for listing the universe only.
+    * **mock** — small synthetic set (includes DEMO13); no network.
+    * **Kite credentials** — instruments + quotes from Kite only (no NSE website).
+    * **custom file + Kite** — restrict to listed symbols, still quote via Kite.
+    * **custom file, no Kite** — symbols only (token=0); for listing, not live watch.
     """
     if mock and not custom_universe_file:
         demo = [
@@ -208,83 +188,34 @@ def build_universe(
             for i, (sym, px, tovr) in enumerate(demo)
         ]
 
-    if custom_universe_file:
-        symbols = load_custom_universe(custom_universe_file)
-        screened = pd.DataFrame(
-            {
-                "symbol": symbols,
-                "close": [0.0] * len(symbols),
-                "turnover_cr": [0.0] * len(symbols),
-            }
-        )
-    else:
-        screened = screen_liquid_symbols(min_turnover_cr, min_price)
+    custom_symbols = (
+        load_custom_universe(custom_universe_file) if custom_universe_file else None
+    )
+    has_kite = bool(kite_api_key and kite_access_token)
 
-    if not kite_api_key or not kite_access_token:
+    if has_kite:
+        kite = _kite_client(kite_api_key, kite_access_token)
+        return _build_from_kite_quotes(
+            kite,
+            min_turnover_cr=min_turnover_cr,
+            min_price=min_price,
+            symbols_filter=custom_symbols,
+        )
+
+    if custom_symbols is not None:
         return [
             Instrument(
-                symbol=row.symbol,
+                symbol=sym,
                 instrument_token=0,
-                name=row.symbol,
-                last_price=float(row.close) if "close" in screened.columns else 0.0,
-                prev_close=float(row.close) if "close" in screened.columns else 0.0,
-                turnover_cr=float(getattr(row, "turnover_cr", 0.0) or 0.0),
+                name=sym,
+                last_price=0.0,
+                prev_close=0.0,
+                turnover_cr=0.0,
             )
-            for row in screened.itertuples(index=False)
+            for sym in custom_symbols
         ]
 
-    kite = _kite_client(kite_api_key, kite_access_token)
-    nse = load_nse_eq_instruments(kite)
-    merged = screened.merge(
-        nse,
-        left_on="symbol",
-        right_on="tradingsymbol",
-        how="inner",
+    raise RuntimeError(
+        "Live universe needs Kite credentials (KITE_API_KEY + KITE_ACCESS_TOKEN) "
+        "or CUSTOM_UNIVERSE_FILE. Set FEED_MODE=kite after login, or use mock mode."
     )
-    if merged.empty:
-        raise RuntimeError("No overlap between liquidity screen and Kite NSE EQ list")
-
-    # Quote in batches of 250 (Kite limit).
-    instruments: list[Instrument] = []
-    tokens = merged["instrument_token"].astype(int).tolist()
-    symbols = merged["tradingsymbol"].astype(str).tolist()
-    names = merged["name"].fillna("").astype(str).tolist()
-    turnover_crs = (
-        merged["turnover_cr"].astype(float).tolist()
-        if "turnover_cr" in merged.columns
-        else [0.0] * len(merged)
-    )
-    bhav_closes = (
-        merged["close"].astype(float).tolist()
-        if "close" in merged.columns
-        else [0.0] * len(merged)
-    )
-
-    quote_map: dict[str, dict[str, Any]] = {}
-    batch_size = 250
-    for i in range(0, len(symbols), batch_size):
-        keys = [f"NSE:{s}" for s in symbols[i : i + batch_size]]
-        quote_map.update(kite.quote(keys))
-
-    for token, symbol, name, tovr, bhav_close in zip(
-        tokens, symbols, names, turnover_crs, bhav_closes, strict=True
-    ):
-        q = quote_map.get(f"NSE:{symbol}", {})
-        ohlc = q.get("ohlc") or {}
-        prev_close = float(ohlc.get("close") or bhav_close or 0.0)
-        last_price = float(q.get("last_price") or prev_close or 0.0)
-        if prev_close <= 0:
-            continue
-        instruments.append(
-            Instrument(
-                symbol=symbol,
-                instrument_token=int(token),
-                name=name or symbol,
-                last_price=last_price,
-                prev_close=prev_close,
-                turnover_cr=float(tovr or 0.0),
-            )
-        )
-
-    logger.info("Universe ready: %d instruments with prev_close", len(instruments))
-    return instruments

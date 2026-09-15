@@ -4,13 +4,13 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 
 ## What it watches
 
-Not the full NSE list and not F&O-only. Default universe:
+Not the full NSE list and not F&O-only. Default **live** universe (Kite only — no NSE website scrape):
 
-1. NSE **EQ** cash names from Kite instruments (when live)
-2. Prior-session **NSE bhavcopy** turnover ≥ **₹25 crore** (`MIN_TURNOVER_CR`)
-3. Close/price ≥ **₹20** (`MIN_PRICE`)
+1. All NSE **EQ** cash names from `kite.instruments("NSE")`
+2. Session turnover proxy `volume × LTP` ≥ **₹25 crore** (`MIN_TURNOVER_CR`)
+3. Prev close / price ≥ **₹20** (`MIN_PRICE`)
 
-Override with `CUSTOM_UNIVERSE_FILE` (one ticker per line) if you want a fixed list.
+Override with `CUSTOM_UNIVERSE_FILE` (one ticker per line) for a fixed list (still quoted via Kite when live).
 
 ## Quick start (mock — no credentials)
 
@@ -94,7 +94,7 @@ nse-alert login-hint
 src/nse_alert/
   cli.py              # click entrypoint
   config.py           # pydantic-settings / .env
-  universe.py         # bhavcopy liquidity screen + Kite mapping
+  universe.py         # Kite instruments + quote liquidity screen
   feed.py             # MockFeed + KiteFeed (LTP)
   engine.py           # % move + dedupe
   notify/telegram.py  # Telegram + console
