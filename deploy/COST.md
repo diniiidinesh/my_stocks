@@ -1,5 +1,7 @@
 # Cloud pick + intro offers (for nse-alert)
 
+> **Docs map:** [../docs/README.md](../docs/README.md) · install steps: [CLOUD.md](CLOUD.md)
+
 Your workload is tiny: one Python process, Docker optional, ~1 GB RAM, fixed public IP for orders.
 
 ## Short answer

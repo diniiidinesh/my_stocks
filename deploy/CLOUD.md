@@ -1,8 +1,12 @@
 # Cloud deploy (AWS / any VPS) + API orders
 
+> **Docs map:** [../docs/README.md](../docs/README.md) · costs: [COST.md](COST.md) · alerts: [../docs/ALERTS.md](../docs/ALERTS.md) · login: [../docs/LOGIN.md](../docs/LOGIN.md)
+
 This app can run 24×5 on a small cloud VM so you don’t keep a laptop terminal open.
 For **API order placement**, SEBI/NSE rules (from **1 Apr 2026** at Zerodha) require a
 **whitelisted static public IP**.
+
+**Alerts-only** (no orders) do not need the whitelist. **F&O / ASM alert features** do not change cloud networking or daily login — same token + same static IP rules as before.
 
 ## Recommended shape
 
@@ -76,7 +80,9 @@ nano .env   # fill Kite + Telegram + TRADE_*
 
 ```env
 FEED_MODE=kite
-THRESHOLD_PCT=4,7,11
+THRESHOLD_PCT=4,7,11,13
+FO_ONLY_THRESHOLDS=4
+ASM_ENABLED=true
 CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt
 
 KITE_API_KEY=...
@@ -97,6 +103,8 @@ TRADE_ON_THRESHOLDS=13
 TRADE_SIDES=up
 TRADE_STOP_LOSS_PCT=2
 ```
+
+Full env reference: [../.env.example](../.env.example). Alert semantics: [../docs/ALERTS.md](../docs/ALERTS.md).
 
 ## Daily login (access token)
 
