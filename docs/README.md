@@ -10,6 +10,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | Understand alert rules (4% F&O, ASM, reports) | [ALERTS.md](ALERTS.md) |
 | Set up / renew Kite login | [LOGIN.md](LOGIN.md) |
 | Enable test orders | [ORDERS.md](ORDERS.md) |
+| Test auto/dry-run/confirm orders | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Pick a cloud VM / free tier | [../deploy/COST.md](../deploy/COST.md) |
 | Install on Lightsail / Oracle | [../deploy/CLOUD.md](../deploy/CLOUD.md) |
 | See where code lives | [ARCHITECTURE.md](ARCHITECTURE.md) |

@@ -345,7 +345,11 @@ class OrderExecutor:
             logger.info("%s", result.message)
             return result
 
-        kite = self._kite()
+        try:
+            kite = self._kite()
+        except Exception as exc:  # noqa: BLE001
+            return OrderResult(False, mode, request, None, f"Order failed: {exc}", now)
+
         product = kite.PRODUCT_CNC if request.product == "CNC" else kite.PRODUCT_MIS
         txn = (
             kite.TRANSACTION_TYPE_BUY if request.side == "BUY" else kite.TRANSACTION_TYPE_SELL
