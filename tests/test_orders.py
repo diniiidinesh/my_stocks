@@ -118,11 +118,15 @@ def test_tc_dry_entry_and_sl_and_position(tmp_path: Path) -> None:
     assert entry.ok and entry.order_id and entry.order_id.startswith("DRY-")
     assert sl is not None and sl.ok
     assert sl.request.side == "SELL"
-    assert sl.request.order_type == "SL-M"
-    assert sl.request.trigger_price == round_tick(113.0 * 0.98)
+    assert sl.request.order_type == "SL"
+    trigger = round_tick(113.0 * 0.98)
+    assert sl.request.trigger_price == trigger
+    assert sl.request.price == round_tick(trigger - 0.10)  # 2 ticks
     assert ex.book is not None
     assert ex.book.has_open_position("RELIANCE")
-    assert ex.book.placed_count == 2  # entry + SL both recorded in dry_run
+    # Entry counts toward cap; stop does not
+    assert ex.book.placed_count == 1
+    assert len(ex.book._data["history"]) == 2  # noqa: SLF001
 
 
 def test_tc_dry_blocks_second_entry_while_open(tmp_path: Path) -> None:
@@ -137,11 +141,11 @@ def test_tc_dry_blocks_second_entry_while_open(tmp_path: Path) -> None:
 
 
 def test_tc_dry_daily_cap_blocks_further_entries(tmp_path: Path) -> None:
-    ex = _executor(tmp_path, max_orders_per_day=2)
-    # First entry+SL consumes 2 placed_count in dry_run
+    ex = _executor(tmp_path, max_orders_per_day=1)
+    # Cap=1 still allows entry + stop (stop excluded from cap)
     entry, sl = ex.place_entry_with_stop(_buy_req("AAA"), entry_ltp=100.0)
-    assert entry.ok and sl is not None
-    assert ex.book is not None and ex.book.placed_count == 2
+    assert entry.ok and sl is not None and sl.ok
+    assert ex.book is not None and ex.book.placed_count == 1
     blocked, _ = ex.place_entry_with_stop(_buy_req("BBB"), entry_ltp=50.0)
     assert not blocked.ok
     assert "Daily order cap" in blocked.message
@@ -200,14 +204,16 @@ class _FakeKite:
         return f"OID-{self._n}"
 
 
-def test_tc_live_mock_auto_places_market_then_slm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tc_live_mock_auto_places_market_then_sl_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     fake = _FakeKite()
     ex = _executor(
         tmp_path,
         mode="auto",
         api_key="k",
         access_token="t",
-        max_orders_per_day=10,
+        max_orders_per_day=1,  # stop must still place when cap is 1
     )
     monkeypatch.setattr(ex, "_kite", lambda: fake)
 
@@ -221,10 +227,14 @@ def test_tc_live_mock_auto_places_market_then_slm(tmp_path: Path, monkeypatch: p
     assert fake.calls[0]["tradingsymbol"] == "INFY"
     assert fake.calls[0]["market_protection"] == 2
     assert fake.calls[1]["transaction_type"] == "SELL"
-    assert fake.calls[1]["order_type"] == "SL-M"
-    assert fake.calls[1]["trigger_price"] == round_tick(1500.0 * 0.98)
+    assert fake.calls[1]["order_type"] == "SL"
+    trigger = round_tick(1500.0 * 0.98)
+    assert fake.calls[1]["trigger_price"] == trigger
+    assert fake.calls[1]["price"] == round_tick(trigger - 0.10)
+    assert "market_protection" not in fake.calls[1]
     assert ex.book is not None
     assert ex.book.has_open_position("INFY")
+    assert ex.book.placed_count == 1
 
 
 def test_tc_live_mock_kite_error_returns_failure(
@@ -334,9 +344,10 @@ def test_tc_book_resets_on_new_calendar_day(tmp_path: Path) -> None:
 
 
 def test_tc_stop_price_rounding_cases() -> None:
-    ex = OrderExecutor(stop_loss_pct=2.0)
+    ex = OrderExecutor(stop_loss_pct=2.0, stop_limit_ticks=2)
     assert ex.stop_price_from_entry(100.0) == 98.0
     assert ex.stop_price_from_entry(113.37) == round_tick(113.37 * 0.98)
+    assert ex.stop_limit_price_from_trigger(98.0) == 97.9
 
 
 def test_tc_alert_dataclass_still_compatible_with_trade_fields() -> None:

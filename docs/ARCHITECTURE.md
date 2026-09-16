@@ -37,7 +37,7 @@ High-level map of the codebase. Prefer this over scrolling `src/` blindly.
 | `feed.py` | `MockFeed`, `KiteFeed` WebSocket |
 | `report.py` | EOD UP/DOWN counts and multi-level gaps |
 | `notify/telegram.py` | Console + Telegram formatting |
-| `orders.py` | Order book, dry-run/confirm/auto, SL-M |
+| `orders.py` | Order book, dry-run/confirm/auto, SL-Limit |
 | `confirm_bot.py` | Telegram CONFIRM/CANCEL listener |
 | `login_ui.py` | Local OAuth / paste-token UI |
 | `envfile.py` | `.env` read/write helpers |

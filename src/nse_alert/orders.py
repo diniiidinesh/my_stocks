@@ -114,8 +114,9 @@ class OrderBook:
         pos = self._data.get("positions", {}).get(symbol.upper())
         return bool(pos and pos.get("status") == "open")
 
-    def record_placed(self, result: OrderResult) -> None:
-        self._data["placed_count"] = self.placed_count + 1
+    def record_placed(self, result: OrderResult, *, toward_daily_cap: bool = True) -> None:
+        if toward_daily_cap:
+            self._data["placed_count"] = self.placed_count + 1
         self._data["history"].append(
             {
                 "order_id": result.order_id,
@@ -126,6 +127,7 @@ class OrderBook:
                 "message": result.message,
                 "placed_at": result.placed_at.isoformat(),
                 "reason": result.request.reason,
+                "toward_daily_cap": toward_daily_cap,
             }
         )
         self._save()
@@ -213,7 +215,7 @@ class OrderBook:
 
 
 class OrderExecutor:
-    """Place CNC equity BUY on +threshold, with a %-stop SL-M from entry."""
+    """Place CNC equity BUY on +threshold, with a %-stop SL-Limit from entry."""
 
     def __init__(
         self,
@@ -229,6 +231,7 @@ class OrderExecutor:
         trade_on_thresholds: list[float] | None = None,
         trade_sides: str = "up",
         stop_loss_pct: float = 2.0,
+        stop_limit_ticks: int = 2,
         book: OrderBook | None = None,
     ) -> None:
         self.api_key = api_key
@@ -243,6 +246,8 @@ class OrderExecutor:
         self.trade_on_thresholds = sorted(trade_on_thresholds or [13.0])
         self.trade_sides = trade_sides.strip().lower()
         self.stop_loss_pct = abs(float(stop_loss_pct))
+        # SELL SL-Limit: limit price = trigger − N ticks (NSE tick ₹0.05)
+        self.stop_limit_ticks = max(1, int(stop_limit_ticks))
         self.book = book
 
     def enabled(self) -> bool:
@@ -265,8 +270,43 @@ class OrderExecutor:
         return "BUY" if direction == "UP" else "SELL"
 
     def stop_price_from_entry(self, entry: float) -> float:
+        """Trigger price for the downside stop (entry × (1 − stop_loss_pct/100))."""
         raw = entry * (1.0 - self.stop_loss_pct / 100.0)
         return round_tick(raw)
+
+    def stop_limit_price_from_trigger(self, trigger: float) -> float:
+        """SELL SL-Limit price: a few ticks below trigger (must stay positive)."""
+        tick = 0.05
+        raw = trigger - (self.stop_limit_ticks * tick)
+        return max(tick, round_tick(raw))
+
+    def build_stop_request(
+        self,
+        *,
+        symbol: str,
+        quantity: int,
+        product: str,
+        entry_ltp: float,
+        market_protection: int = 2,
+    ) -> OrderRequest:
+        """Build a SELL SL (stop-loss limit) under the entry LTP."""
+        trigger = self.stop_price_from_entry(entry_ltp)
+        limit_px = self.stop_limit_price_from_trigger(trigger)
+        return OrderRequest(
+            symbol=symbol,
+            side="SELL",
+            quantity=max(1, int(quantity)),
+            product=product,
+            order_type="SL",
+            price=limit_px,
+            trigger_price=trigger,
+            market_protection=market_protection,
+            tag="nseasl",
+            reason=(
+                f"SL-Limit {self.stop_loss_pct:g}% under entry {entry_ltp:.2f} "
+                f"(trigger={trigger:.2f}, limit={limit_px:.2f})"
+            ),
+        )
 
     def build_request_from_alert(
         self,
@@ -304,13 +344,23 @@ class OrderExecutor:
         kite.set_access_token(self.access_token)
         return kite
 
-    def place(self, request: OrderRequest, *, force_mode: str | None = None) -> OrderResult:
+    def place(
+        self,
+        request: OrderRequest,
+        *,
+        force_mode: str | None = None,
+        toward_daily_cap: bool = True,
+    ) -> OrderResult:
         mode = force_mode or self.mode
         now = datetime.now(timezone.utc)
         if mode == "off":
             return OrderResult(False, mode, request, None, "TRADE_MODE=off", now)
 
-        if self.book and self.book.placed_count >= self.max_orders_per_day:
+        if (
+            toward_daily_cap
+            and self.book
+            and self.book.placed_count >= self.max_orders_per_day
+        ):
             return OrderResult(
                 False,
                 mode,
@@ -332,16 +382,16 @@ class OrderExecutor:
 
         if mode == "dry_run":
             fake_id = f"DRY-{uuid.uuid4().hex[:8]}"
-            result = OrderResult(
-                True,
-                mode,
-                request,
-                fake_id,
-                f"DRY RUN: would {request.side} {request.quantity} {request.symbol}",
-                now,
-            )
+            detail = f"DRY RUN: would {request.side} {request.quantity} {request.symbol}"
+            if request.order_type.upper() in {"SL", "SL-M", "SLM"}:
+                detail += (
+                    f" {request.order_type.upper()}"
+                    f" trigger={request.trigger_price}"
+                    f" limit={request.price}"
+                )
+            result = OrderResult(True, mode, request, fake_id, detail, now)
             if self.book:
-                self.book.record_placed(result)
+                self.book.record_placed(result, toward_daily_cap=toward_daily_cap)
             logger.info("%s", result.message)
             return result
 
@@ -381,6 +431,18 @@ class OrderExecutor:
         if request.trigger_price is not None:
             params["trigger_price"] = request.trigger_price
 
+        if kite_order_type == kite.ORDER_TYPE_SL and (
+            request.price is None or request.trigger_price is None
+        ):
+            return OrderResult(
+                False,
+                mode,
+                request,
+                None,
+                "SL (stop-loss limit) requires both trigger_price and price",
+                now,
+            )
+
         try:
             order_id = str(kite.place_order(**params))
         except Exception as exc:  # noqa: BLE001
@@ -396,7 +458,7 @@ class OrderExecutor:
             now,
         )
         if self.book:
-            self.book.record_placed(result)
+            self.book.record_placed(result, toward_daily_cap=toward_daily_cap)
         logger.info("%s", result.message)
         return result
 
@@ -407,65 +469,41 @@ class OrderExecutor:
         entry_ltp: float,
         force_mode: str | None = None,
     ) -> tuple[OrderResult, OrderResult | None]:
-        """BUY (or SELL) entry, then attach an opposite SL-M at stop_loss_pct from entry."""
-        entry = self.place(request, force_mode=force_mode)
+        """BUY (or SELL) entry, then attach a SELL SL-Limit under entry.
+
+        The stop does **not** consume the daily entry-order cap (so
+        ``TRADE_MAX_ORDERS_PER_DAY=1`` still gets entry + stop).
+        """
+        entry = self.place(request, force_mode=force_mode, toward_daily_cap=True)
         if not entry.ok:
             return entry, None
 
-        stop_px = self.stop_price_from_entry(entry_ltp)
         if request.side != "BUY":
             # Test run is BUY-only with downside SL; skip SL for sells.
             return entry, None
 
-        sl_req = OrderRequest(
+        sl_req = self.build_stop_request(
             symbol=request.symbol,
-            side="SELL",
             quantity=request.quantity,
             product=request.product,
-            order_type="SL-M",
-            price=None,
-            trigger_price=stop_px,
+            entry_ltp=entry_ltp,
             market_protection=request.market_protection,
-            tag="nseasl",
-            reason=f"stop-loss {self.stop_loss_pct:g}% under entry {entry_ltp:.2f}",
         )
         mode = force_mode or self.mode
-        if mode == "dry_run":
-            sl = OrderResult(
-                True,
-                mode,
-                sl_req,
-                f"DRY-SL-{uuid.uuid4().hex[:6]}",
-                (
-                    f"DRY RUN: would place SL-M SELL {sl_req.quantity} {sl_req.symbol} "
-                    f"trigger={stop_px:.2f} (entry≈{entry_ltp:.2f})"
-                ),
-                datetime.now(timezone.utc),
+        sl = self.place(sl_req, force_mode=mode, toward_daily_cap=False)
+        if not sl.ok:
+            logger.error(
+                "Stop-loss failed after entry for %s: %s",
+                request.symbol,
+                sl.message,
             )
-            logger.info("%s", sl.message)
-            if self.book:
-                self.book.record_placed(sl)
-                self.book.record_position(
-                    symbol=request.symbol,
-                    quantity=request.quantity,
-                    entry_price=entry_ltp,
-                    stop_price=stop_px,
-                    entry_order_id=entry.order_id,
-                    stop_order_id=sl.order_id,
-                    mode=mode,
-                )
-            return entry, sl
-
-        # Live: placing SL does not count against "entry" semantics the same way,
-        # but still goes through place() which increments placed_count — bump cap
-        # temporarily by allowing one extra via direct kite call path:
-        sl = self.place(sl_req, force_mode=mode)
         if self.book and entry.ok:
+            trigger = sl_req.trigger_price or self.stop_price_from_entry(entry_ltp)
             self.book.record_position(
                 symbol=request.symbol,
                 quantity=request.quantity,
                 entry_price=entry_ltp,
-                stop_price=stop_px,
+                stop_price=float(trigger),
                 entry_order_id=entry.order_id,
                 stop_order_id=sl.order_id if sl.ok else None,
                 mode=mode,
