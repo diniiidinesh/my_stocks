@@ -195,11 +195,12 @@ def watch_cmd(
                 ttl_minutes=settings.trade_confirm_ttl_minutes,
             )
             stop_px = executor.stop_price_from_entry(alert.ltp)
+            limit_px = executor.stop_limit_price_from_trigger(stop_px)
             msg = (
                 f"CONFIRM ORDER `{pending.id}`\n"
                 f"{req.side} {req.quantity}x {req.symbol} ({req.product} {req.order_type})\n"
-                f"Entry≈`{alert.ltp:.2f}` → SL-M trigger≈`{stop_px:.2f}` "
-                f"(-{settings.trade_stop_loss_pct:g}%)\n"
+                f"Entry≈`{alert.ltp:.2f}` → SL-Limit trigger≈`{stop_px:.2f}` "
+                f"limit≈`{limit_px:.2f}` (-{settings.trade_stop_loss_pct:g}%)\n"
                 f"Reason: {req.reason}\n\n"
                 f"Reply: `CONFIRM {pending.id}` or `CANCEL {pending.id}`\n"
                 f"Or: `uv run nse-alert confirm {pending.id}`"
@@ -321,6 +322,7 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
         trade_on_thresholds=settings.trade_threshold_list,
         trade_sides=settings.trade_sides,
         stop_loss_pct=settings.trade_stop_loss_pct,
+        stop_limit_ticks=settings.trade_stop_limit_ticks,
         book=book,
     )
 

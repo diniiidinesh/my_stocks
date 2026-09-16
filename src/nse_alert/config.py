@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     # up = BUY on UP alerts only
     trade_sides: str = Field(default="up", alias="TRADE_SIDES")
     trade_stop_loss_pct: float = Field(default=2.0, alias="TRADE_STOP_LOSS_PCT")
+    # SELL SL-Limit: limit = trigger − N × ₹0.05 ticks
+    trade_stop_limit_ticks: int = Field(default=2, alias="TRADE_STOP_LIMIT_TICKS")
     trade_confirm_ttl_minutes: int = Field(default=30, alias="TRADE_CONFIRM_TTL_MINUTES")
 
     @property

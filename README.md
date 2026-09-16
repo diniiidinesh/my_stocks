@@ -7,7 +7,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | Alert levels | `4,7,11,13` (`THRESHOLD_PCT`) |
 | ±4% scope | **F&O underlyings only** (`FO_ONLY_THRESHOLDS=4`) |
 | ASM tag | Zerodha RMS sheet (not a Kite API) |
-| Test trades | BUY on **+13% UP** + **2% SL-M** |
+| Test trades | BUY on **+13% UP** + **2% SL-Limit** |
 | Cloud | AWS Lightsail Mumbai (Oracle free if capacity allows) |
 
 ## Documentation map

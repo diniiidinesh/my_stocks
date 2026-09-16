@@ -9,12 +9,14 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_MODE` | `off` / `dry_run` / `confirm` / `auto` | How aggressive |
 | `TRADE_ON_THRESHOLDS` | `13` | Only act on this alert level |
 | `TRADE_SIDES` | `up` | BUY on UP only |
-| `TRADE_STOP_LOSS_PCT` | `2` | SL-M sell ≈ entry × 0.98 |
+| `TRADE_STOP_LOSS_PCT` | `2` | SL trigger ≈ entry × 0.98 |
+| `TRADE_STOP_LIMIT_TICKS` | `2` | Limit = trigger − N×₹0.05 |
 | `TRADE_QTY` | `1` | Shares per order |
 | `TRADE_PRODUCT` | `CNC` | Delivery |
-| `TRADE_MAX_ORDERS_PER_DAY` | `3` | Cap |
+| `TRADE_MAX_ORDERS_PER_DAY` | `3` | Entry-order cap (stops excluded) |
 
-Flow: **+13% UP alert** → market **BUY** → attach **SL-M SELL** at **2% below** entry LTP.  
+Flow: **+13% UP alert** → market **BUY** → attach **SL (stop-loss limit) SELL** with trigger at **2% below** entry and limit a few ticks lower.  
+Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY` (that cap is for entries only).  
 One open position per symbol/day.
 
 `THRESHOLD_PCT` must include `13` (or whatever you set in `TRADE_ON_THRESHOLDS`) or the trade trigger never fires.
