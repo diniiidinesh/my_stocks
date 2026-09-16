@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Protocol
 
 from nse_alert.engine import Alert
@@ -73,6 +74,36 @@ class TelegramNotifier:
             except httpx.HTTPError as exc:
                 logger.error("Telegram send failed: %s", exc)
                 print(chunk, flush=True)
+
+    def send_document(
+        self,
+        path: str | Path,
+        *,
+        caption: str = "",
+    ) -> None:
+        """Upload a file (e.g. Excel screener report) to Telegram."""
+        import httpx
+
+        file_path = Path(path)
+        if not file_path.exists():
+            logger.error("Telegram document missing: %s", file_path)
+            return
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
+        data: dict[str, str] = {"chat_id": self.chat_id}
+        if caption:
+            # Caption limit is 1024 chars.
+            data["caption"] = caption[:1000]
+        try:
+            with file_path.open("rb") as fh:
+                resp = httpx.post(
+                    url,
+                    data=data,
+                    files={"document": (file_path.name, fh)},
+                    timeout=120.0,
+                )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.error("Telegram document send failed: %s", exc)
 
 
 def _chunk_text(text: str, limit: int) -> list[str]:
