@@ -12,12 +12,18 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_STOP_LOSS_PCT` | `2` | SL trigger ≈ entry × 0.98 |
 | `TRADE_STOP_LIMIT_TICKS` | `2` | Limit = trigger − N×₹0.05 |
 | `TRADE_QTY` | `1` | Shares per order |
-| `TRADE_PRODUCT` | `CNC` | Delivery |
+| `TRADE_PRODUCT` | `MIS` | Intraday (required for same-day sell-SL) |
+| `TRADE_STOP_WAIT_SEC` | `20` | Wait for entry fill before SL (live) |
+| `TRADE_TRAIL_BREAKEVEN` | `true` | Move SL to entry when LTP rises enough |
+| `TRADE_TRAIL_BREAKEVEN_PCT` | `2` | Arm cost-to-cost trail at entry × 1.02 |
 | `TRADE_MAX_ORDERS_PER_DAY` | `10` | Entry-order cap (stops excluded) |
 
-Flow: **+13% UP alert** → market **BUY** → attach **SL (stop-loss limit) SELL** with trigger at **2% below** entry and limit a few ticks lower.  
+Flow: **+13% UP alert** → **MIS** market **BUY** → wait for fill → attach **SL (stop-loss limit) SELL** with trigger at **2% below fill price** and limit a few ticks lower.  
+On each tick, if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), the stop is **modified** to entry (cost-to-cost).  
 Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY` (that cap is for entries only).  
 One open position per symbol/day.
+
+**Why MIS?** CNC sell-SL right after a buy often fails — you need holdings; same-day exit needs intraday product.
 
 `THRESHOLD_PCT` must include `13` (or whatever you set in `TRADE_ON_THRESHOLDS`) or the trade trigger never fires.
 

@@ -35,7 +35,7 @@ def _buy_req(symbol: str = "RELIANCE") -> OrderRequest:
         symbol=symbol,
         side="BUY",
         quantity=1,
-        product="CNC",
+        product="MIS",
         order_type="MARKET",
         price=None,
         trigger_price=None,
@@ -194,26 +194,45 @@ class _FakeKite:
     VARIETY_REGULAR = "regular"
     EXCHANGE_NSE = "NSE"
 
-    def __init__(self) -> None:
+    def __init__(self, *, fill_price: float = 1500.0, fill_qty: int = 1) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.modifies: list[dict[str, Any]] = []
         self._n = 0
+        self.fill_price = fill_price
+        self.fill_qty = fill_qty
 
     def place_order(self, **params: Any) -> str:
         self._n += 1
         self.calls.append(params)
         return f"OID-{self._n}"
 
+    def order_history(self, order_id: str) -> list[dict[str, Any]]:
+        return [
+            {
+                "status": "COMPLETE",
+                "average_price": self.fill_price,
+                "filled_quantity": self.fill_qty,
+                "quantity": self.fill_qty,
+            }
+        ]
+
+    def modify_order(self, **params: Any) -> str:
+        self.modifies.append(params)
+        return "MOD-1"
+
 
 def test_tc_live_mock_auto_places_market_then_sl_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = _FakeKite()
+    fill_price = 1498.75
+    fake = _FakeKite(fill_price=fill_price, fill_qty=1)
     ex = _executor(
         tmp_path,
         mode="auto",
         api_key="k",
         access_token="t",
         max_orders_per_day=1,  # stop must still place when cap is 1
+        stop_wait_sec=1.0,
     )
     monkeypatch.setattr(ex, "_kite", lambda: fake)
 
@@ -224,16 +243,20 @@ def test_tc_live_mock_auto_places_market_then_sl_limit(
     assert len(fake.calls) == 2
     assert fake.calls[0]["transaction_type"] == "BUY"
     assert fake.calls[0]["order_type"] == "MARKET"
+    assert fake.calls[0]["product"] == "MIS"
     assert fake.calls[0]["tradingsymbol"] == "INFY"
     assert fake.calls[0]["market_protection"] == 2
     assert fake.calls[1]["transaction_type"] == "SELL"
     assert fake.calls[1]["order_type"] == "SL"
-    trigger = round_tick(1500.0 * 0.98)
+    assert fake.calls[1]["product"] == "MIS"
+    trigger = round_tick(fill_price * 0.98)
     assert fake.calls[1]["trigger_price"] == trigger
     assert fake.calls[1]["price"] == round_tick(trigger - 0.10)
     assert "market_protection" not in fake.calls[1]
     assert ex.book is not None
     assert ex.book.has_open_position("INFY")
+    pos = ex.book.get_position("INFY")
+    assert pos is not None and pos["entry_price"] == fill_price
     assert ex.book.placed_count == 1
 
 
@@ -348,6 +371,56 @@ def test_tc_stop_price_rounding_cases() -> None:
     assert ex.stop_price_from_entry(100.0) == 98.0
     assert ex.stop_price_from_entry(113.37) == round_tick(113.37 * 0.98)
     assert ex.stop_limit_price_from_trigger(98.0) == 97.9
+
+
+def test_tc_sl_trigger_clamped_below_ltp() -> None:
+    ex = OrderExecutor(stop_loss_pct=2.0, stop_limit_ticks=2)
+    req = ex.build_stop_request(
+        symbol="AAA",
+        quantity=1,
+        product="MIS",
+        entry_price=100.0,
+        reference_ltp=98.5,
+    )
+    assert req.trigger_price is not None
+    assert req.trigger_price < 98.5
+
+
+def test_tc_trail_breakeven_modifies_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeKite(fill_price=100.0)
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        trail_breakeven=True,
+        trail_breakeven_pct=2.0,
+        stop_wait_sec=1.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    req = _buy_req("TATASTEEL")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+
+    assert ex.manage_open_stops("TATASTEEL", 101.0) is None
+    msg = ex.manage_open_stops("TATASTEEL", 102.5)
+    assert msg is not None and "Trailed SL" in msg
+    assert len(fake.modifies) == 1
+    assert fake.modifies[0]["trigger_price"] == 100.0
+    pos = ex.book.get_position("TATASTEEL") if ex.book else None
+    assert pos is not None and pos["breakeven_armed"] is True
+    assert ex.manage_open_stops("TATASTEEL", 105.0) is None
+
+
+def test_tc_trail_breakeven_dry_run(tmp_path: Path) -> None:
+    ex = _executor(tmp_path, trail_breakeven=True, trail_breakeven_pct=2.0)
+    req = _buy_req("SBIN")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=500.0)
+    assert entry.ok and sl is not None and sl.ok
+    msg = ex.manage_open_stops("SBIN", 510.0)
+    assert msg is not None and "cost" in msg.lower()
+    pos = ex.book.get_position("SBIN") if ex.book else None
+    assert pos is not None and pos["breakeven_armed"] is True
 
 
 def test_tc_alert_dataclass_still_compatible_with_trade_fields() -> None:

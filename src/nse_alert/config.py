@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # Trading — test defaults: BUY only on +13%, SL 2% below entry
     trade_mode: str = Field(default="off", alias="TRADE_MODE")
     trade_qty: int = Field(default=1, alias="TRADE_QTY")
-    trade_product: str = Field(default="CNC", alias="TRADE_PRODUCT")
+    trade_product: str = Field(default="MIS", alias="TRADE_PRODUCT")
     trade_order_type: str = Field(default="MARKET", alias="TRADE_ORDER_TYPE")
     trade_market_protection: int = Field(default=2, alias="TRADE_MARKET_PROTECTION")
     trade_max_orders_per_day: int = Field(default=10, alias="TRADE_MAX_ORDERS_PER_DAY")
@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     trade_stop_loss_pct: float = Field(default=2.0, alias="TRADE_STOP_LOSS_PCT")
     # SELL SL-Limit: limit = trigger − N × ₹0.05 ticks
     trade_stop_limit_ticks: int = Field(default=2, alias="TRADE_STOP_LIMIT_TICKS")
+    # Wait for entry MARKET fill before placing SL (live auto/confirm)
+    trade_stop_wait_sec: float = Field(default=20.0, alias="TRADE_STOP_WAIT_SEC")
+    # When LTP rises this % above entry, move SL trigger to entry (cost-to-cost)
+    trade_trail_breakeven: bool = Field(default=True, alias="TRADE_TRAIL_BREAKEVEN")
+    trade_trail_breakeven_pct: float = Field(default=2.0, alias="TRADE_TRAIL_BREAKEVEN_PCT")
     trade_confirm_ttl_minutes: int = Field(default=30, alias="TRADE_CONFIRM_TTL_MINUTES")
 
     @property

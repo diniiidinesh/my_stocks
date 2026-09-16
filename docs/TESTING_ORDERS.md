@@ -76,7 +76,7 @@ You must run these on your machine / Lightsail VM with a real Kite session.
 
 1. Paid Kite Connect + valid **today’s** `KITE_ACCESS_TOKEN` (`nse-alert login`).
 2. Static IP **whitelisted** on Kite (required for live orders from Apr 2026).
-3. Funds / holdings enough for **1 share** CNC of a liquid name (or keep `dry_run` until ready).
+3. Funds / margin enough for **1 share MIS** of a liquid name (or keep `dry_run` until ready).
 4. Prefer market hours (9:15–15:30 IST) for live placement.
 5. Start with **`TRADE_MODE=dry_run`** on the VM once, then **`confirm`**, only then **`auto`**.
 
@@ -106,7 +106,10 @@ TRADE_SIDES=up
 TRADE_STOP_LOSS_PCT=2
 TRADE_QTY=1
 TRADE_MAX_ORDERS_PER_DAY=10
-TRADE_PRODUCT=CNC
+TRADE_PRODUCT=MIS
+TRADE_STOP_WAIT_SEC=20
+TRADE_TRAIL_BREAKEVEN=true
+TRADE_TRAIL_BREAKEVEN_PCT=2
 CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt
 ```
 
@@ -128,7 +131,9 @@ TRADE_MODE=confirm   # then later: auto
 ## Known behaviours to remember while testing
 
 1. **Daily cap counts entries only** — a stop-loss does not consume `TRADE_MAX_ORDERS_PER_DAY` (so `=1` still gets BUY + SL).  
-2. Stop is **SL-Limit**: trigger = 2% below entry; limit = trigger − `TRADE_STOP_LIMIT_TICKS` × ₹0.05.  
-3. Test strategy is **BUY + downside SL only**; DOWN alerts do not trade when `TRADE_SIDES=up`.  
-4. Confirm path forces place mode `auto` when executor is not `dry_run` (see `_confirm_pending` in `cli.py`).  
-5. Login/token flow is unchanged by order modes — refresh token daily before live tests.
+2. Stop is **SL-Limit** on **MIS**: trigger = 2% below **fill price**; limit = trigger − `TRADE_STOP_LIMIT_TICKS` × ₹0.05.  
+3. Live auto waits for entry `COMPLETE` (up to `TRADE_STOP_WAIT_SEC`) before placing SL.  
+4. When LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), stop is modified to entry (cost-to-cost).  
+5. Test strategy is **BUY + downside SL only**; DOWN alerts do not trade when `TRADE_SIDES=up`.  
+6. Confirm path forces place mode `auto` when executor is not `dry_run` (see `_confirm_pending` in `cli.py`).  
+7. Login/token flow is unchanged by order modes — refresh token daily before live tests.

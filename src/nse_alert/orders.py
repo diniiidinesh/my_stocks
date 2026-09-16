@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
@@ -10,6 +11,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
+
+NSE_TICK = 0.05
+_TERMINAL_ORDER_STATUSES = frozenset({"COMPLETE", "CANCELLED", "REJECTED"})
 
 TradeMode = Literal["off", "dry_run", "confirm", "auto"]
 TransactionSide = Literal["BUY", "SELL"]
@@ -139,20 +143,56 @@ class OrderBook:
         quantity: int,
         entry_price: float,
         stop_price: float,
+        stop_limit_price: float,
         entry_order_id: str | None,
         stop_order_id: str | None,
         mode: str,
+        product: str = "MIS",
     ) -> None:
         self._data["positions"][symbol.upper()] = {
             "status": "open",
             "quantity": quantity,
             "entry_price": entry_price,
             "stop_price": stop_price,
+            "stop_limit_price": stop_limit_price,
             "entry_order_id": entry_order_id,
             "stop_order_id": stop_order_id,
             "mode": mode,
+            "product": product.upper(),
+            "breakeven_armed": False,
             "opened_at": datetime.now(timezone.utc).isoformat(),
         }
+        self._save()
+
+    def get_position(self, symbol: str) -> dict[str, Any] | None:
+        raw = self._data.get("positions", {}).get(symbol.upper())
+        if not raw or raw.get("status") != "open":
+            return None
+        return raw
+
+    def list_open_positions(self) -> list[tuple[str, dict[str, Any]]]:
+        out: list[tuple[str, dict[str, Any]]] = []
+        for sym, raw in self._data.get("positions", {}).items():
+            if raw.get("status") == "open":
+                out.append((sym, raw))
+        return out
+
+    def update_stop(
+        self,
+        symbol: str,
+        *,
+        stop_price: float,
+        stop_limit_price: float,
+        breakeven_armed: bool | None = None,
+    ) -> None:
+        key = symbol.upper()
+        pos = self._data.get("positions", {}).get(key)
+        if not pos:
+            return
+        pos["stop_price"] = stop_price
+        pos["stop_limit_price"] = stop_limit_price
+        if breakeven_armed is not None:
+            pos["breakeven_armed"] = breakeven_armed
         self._save()
 
     def add_pending(
@@ -215,7 +255,7 @@ class OrderBook:
 
 
 class OrderExecutor:
-    """Place CNC equity BUY on +threshold, with a %-stop SL-Limit from entry."""
+    """Place MIS intraday BUY on +threshold, with a %-stop SL-Limit from fill price."""
 
     def __init__(
         self,
@@ -224,7 +264,7 @@ class OrderExecutor:
         access_token: str = "",
         mode: TradeMode = "off",
         default_qty: int = 1,
-        product: str = "CNC",
+        product: str = "MIS",
         order_type: str = "MARKET",
         market_protection: int = 2,
         max_orders_per_day: int = 10,
@@ -232,6 +272,9 @@ class OrderExecutor:
         trade_sides: str = "up",
         stop_loss_pct: float = 2.0,
         stop_limit_ticks: int = 2,
+        stop_wait_sec: float = 20.0,
+        trail_breakeven: bool = True,
+        trail_breakeven_pct: float = 2.0,
         book: OrderBook | None = None,
     ) -> None:
         self.api_key = api_key
@@ -248,6 +291,9 @@ class OrderExecutor:
         self.stop_loss_pct = abs(float(stop_loss_pct))
         # SELL SL-Limit: limit price = trigger − N ticks (NSE tick ₹0.05)
         self.stop_limit_ticks = max(1, int(stop_limit_ticks))
+        self.stop_wait_sec = max(1.0, float(stop_wait_sec))
+        self.trail_breakeven = trail_breakeven
+        self.trail_breakeven_pct = abs(float(trail_breakeven_pct))
         self.book = book
 
     def enabled(self) -> bool:
@@ -276,9 +322,16 @@ class OrderExecutor:
 
     def stop_limit_price_from_trigger(self, trigger: float) -> float:
         """SELL SL-Limit price: a few ticks below trigger (must stay positive)."""
-        tick = 0.05
-        raw = trigger - (self.stop_limit_ticks * tick)
-        return max(tick, round_tick(raw))
+        raw = trigger - (self.stop_limit_ticks * NSE_TICK)
+        return max(NSE_TICK, round_tick(raw))
+
+    def _clamp_sell_sl_trigger(self, trigger: float, reference_ltp: float) -> float:
+        """Kite rejects sell SL when trigger is at/above the reference LTP."""
+        if reference_ltp <= 0:
+            return trigger
+        if trigger >= reference_ltp:
+            trigger = round_tick(reference_ltp - NSE_TICK)
+        return max(NSE_TICK, trigger)
 
     def build_stop_request(
         self,
@@ -286,12 +339,18 @@ class OrderExecutor:
         symbol: str,
         quantity: int,
         product: str,
-        entry_ltp: float,
+        entry_price: float,
+        reference_ltp: float | None = None,
         market_protection: int = 2,
+        reason_prefix: str = "",
     ) -> OrderRequest:
-        """Build a SELL SL (stop-loss limit) under the entry LTP."""
-        trigger = self.stop_price_from_entry(entry_ltp)
+        """Build a SELL SL (stop-loss limit) under the entry fill price."""
+        ref = reference_ltp if reference_ltp is not None else entry_price
+        trigger = self._clamp_sell_sl_trigger(
+            self.stop_price_from_entry(entry_price), ref
+        )
         limit_px = self.stop_limit_price_from_trigger(trigger)
+        prefix = f"{reason_prefix} " if reason_prefix else ""
         return OrderRequest(
             symbol=symbol,
             side="SELL",
@@ -303,10 +362,136 @@ class OrderExecutor:
             market_protection=market_protection,
             tag="nseasl",
             reason=(
-                f"SL-Limit {self.stop_loss_pct:g}% under entry {entry_ltp:.2f} "
+                f"{prefix}SL-Limit {self.stop_loss_pct:g}% under entry {entry_price:.2f} "
                 f"(trigger={trigger:.2f}, limit={limit_px:.2f})"
-            ),
+            ).strip(),
         )
+
+    def _wait_for_entry_fill(
+        self,
+        order_id: str,
+        *,
+        fallback_price: float,
+        fallback_qty: int,
+    ) -> tuple[float, int]:
+        """Poll Kite until the entry MARKET order completes (or timeout)."""
+        try:
+            kite = self._kite()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not poll entry fill (%s); using alert LTP", exc)
+            return fallback_price, fallback_qty
+
+        deadline = time.monotonic() + self.stop_wait_sec
+        while time.monotonic() < deadline:
+            try:
+                history = kite.order_history(order_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("order_history failed for %s: %s", order_id, exc)
+                time.sleep(0.5)
+                continue
+            if history:
+                latest = history[-1]
+                status = str(latest.get("status") or "")
+                if status == "COMPLETE":
+                    avg = float(latest.get("average_price") or fallback_price)
+                    qty = int(latest.get("filled_quantity") or latest.get("quantity") or fallback_qty)
+                    logger.info(
+                        "Entry %s COMPLETE avg=%.2f qty=%d",
+                        order_id,
+                        avg,
+                        qty,
+                    )
+                    return avg, max(1, qty)
+                if status in _TERMINAL_ORDER_STATUSES - {"COMPLETE"}:
+                    logger.error("Entry order %s ended as %s", order_id, status)
+                    return fallback_price, fallback_qty
+            time.sleep(0.4)
+
+        logger.warning(
+            "Entry order %s not COMPLETE within %.0fs; SL uses fallback price %.2f",
+            order_id,
+            self.stop_wait_sec,
+            fallback_price,
+        )
+        return fallback_price, fallback_qty
+
+    def _modify_stop_order(
+        self,
+        *,
+        stop_order_id: str,
+        quantity: int,
+        trigger: float,
+        limit_px: float,
+        force_mode: str | None = None,
+    ) -> bool:
+        mode = force_mode or self.mode
+        if mode == "dry_run" or str(stop_order_id).startswith("DRY-"):
+            logger.info(
+                "DRY RUN: would modify stop %s → trigger=%.2f limit=%.2f",
+                stop_order_id,
+                trigger,
+                limit_px,
+            )
+            return True
+        try:
+            kite = self._kite()
+            kite.modify_order(
+                variety=kite.VARIETY_REGULAR,
+                order_id=stop_order_id,
+                quantity=quantity,
+                order_type=kite.ORDER_TYPE_SL,
+                price=limit_px,
+                trigger_price=trigger,
+            )
+            logger.info(
+                "Modified stop %s → trigger=%.2f limit=%.2f",
+                stop_order_id,
+                trigger,
+                limit_px,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Stop modify failed for %s: %s", stop_order_id, exc)
+            return False
+
+    def manage_open_stops(self, symbol: str, ltp: float) -> str | None:
+        """Trail stop to entry (cost-to-cost) when LTP rises enough after entry."""
+        if not self.book or not self.trail_breakeven:
+            return None
+        pos = self.book.get_position(symbol)
+        if not pos or pos.get("breakeven_armed"):
+            return None
+        stop_id = pos.get("stop_order_id")
+        if not stop_id:
+            return None
+        entry = float(pos.get("entry_price") or 0.0)
+        if entry <= 0 or ltp <= 0:
+            return None
+        if ltp < entry * (1.0 + self.trail_breakeven_pct / 100.0):
+            return None
+
+        trigger = self._clamp_sell_sl_trigger(round_tick(entry), ltp)
+        limit_px = self.stop_limit_price_from_trigger(trigger)
+        qty = int(pos.get("quantity") or 1)
+        if self._modify_stop_order(
+            stop_order_id=str(stop_id),
+            quantity=qty,
+            trigger=trigger,
+            limit_px=limit_px,
+        ):
+            self.book.update_stop(
+                symbol,
+                stop_price=trigger,
+                stop_limit_price=limit_px,
+                breakeven_armed=True,
+            )
+            msg = (
+                f"Trailed SL on {symbol} to cost: trigger={trigger:.2f} "
+                f"limit={limit_px:.2f} (entry={entry:.2f}, LTP={ltp:.2f})"
+            )
+            logger.info(msg)
+            return msg
+        return None
 
     def build_request_from_alert(
         self,
@@ -469,43 +654,61 @@ class OrderExecutor:
         entry_ltp: float,
         force_mode: str | None = None,
     ) -> tuple[OrderResult, OrderResult | None]:
-        """BUY (or SELL) entry, then attach a SELL SL-Limit under entry.
+        """BUY entry, wait for fill, then attach a SELL SL-Limit (MIS).
 
-        The stop does **not** consume the daily entry-order cap (so
-        ``TRADE_MAX_ORDERS_PER_DAY=1`` still gets entry + stop).
+        Uses **fill price** (not alert LTP) for the stop. Stops do not
+        consume the daily **entry** cap. Prefer ``TRADE_PRODUCT=MIS`` —
+        CNC sell-SL right after a buy often fails (no same-day holdings).
         """
-        entry = self.place(request, force_mode=force_mode, toward_daily_cap=True)
+        mode = force_mode or self.mode
+        entry = self.place(request, force_mode=mode, toward_daily_cap=True)
         if not entry.ok:
             return entry, None
 
         if request.side != "BUY":
-            # Test run is BUY-only with downside SL; skip SL for sells.
             return entry, None
+
+        if mode == "dry_run":
+            fill_price = entry_ltp
+            fill_qty = request.quantity
+        elif entry.order_id:
+            fill_price, fill_qty = self._wait_for_entry_fill(
+                entry.order_id,
+                fallback_price=entry_ltp,
+                fallback_qty=request.quantity,
+            )
+        else:
+            fill_price, fill_qty = entry_ltp, request.quantity
 
         sl_req = self.build_stop_request(
             symbol=request.symbol,
-            quantity=request.quantity,
+            quantity=fill_qty,
             product=request.product,
-            entry_ltp=entry_ltp,
+            entry_price=fill_price,
+            reference_ltp=entry_ltp,
             market_protection=request.market_protection,
         )
-        mode = force_mode or self.mode
         sl = self.place(sl_req, force_mode=mode, toward_daily_cap=False)
         if not sl.ok:
             logger.error(
-                "Stop-loss failed after entry for %s: %s",
+                "Stop-loss failed after entry for %s (%s %s): %s",
                 request.symbol,
+                request.product,
+                fill_price,
                 sl.message,
             )
         if self.book and entry.ok:
-            trigger = sl_req.trigger_price or self.stop_price_from_entry(entry_ltp)
+            trigger = float(sl_req.trigger_price or self.stop_price_from_entry(fill_price))
+            limit_px = float(sl_req.price or self.stop_limit_price_from_trigger(trigger))
             self.book.record_position(
                 symbol=request.symbol,
-                quantity=request.quantity,
-                entry_price=entry_ltp,
-                stop_price=float(trigger),
+                quantity=fill_qty,
+                entry_price=fill_price,
+                stop_price=trigger,
+                stop_limit_price=limit_px,
                 entry_order_id=entry.order_id,
                 stop_order_id=sl.order_id if sl.ok else None,
                 mode=mode,
+                product=request.product,
             )
         return entry, sl

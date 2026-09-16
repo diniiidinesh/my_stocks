@@ -221,6 +221,11 @@ def watch_cmd(
                 tg.send_text(note)
 
     def on_tick(symbol: str, ltp: float) -> None:
+        trail_msg = executor.manage_open_stops(symbol, ltp)
+        if trail_msg:
+            logger.info("%s", trail_msg)
+            if tg:
+                tg.send_text(trail_msg)
         for alert in engine.on_tick(symbol, ltp):
             notifier.send(alert)
             alert_count["n"] += 1
@@ -323,6 +328,9 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
         trade_sides=settings.trade_sides,
         stop_loss_pct=settings.trade_stop_loss_pct,
         stop_limit_ticks=settings.trade_stop_limit_ticks,
+        stop_wait_sec=settings.trade_stop_wait_sec,
+        trail_breakeven=settings.trade_trail_breakeven,
+        trail_breakeven_pct=settings.trade_trail_breakeven_pct,
         book=book,
     )
 
