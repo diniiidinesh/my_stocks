@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from nse_alert.engine import Alert, alert_from_event
 
+logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -24,6 +27,19 @@ class ThresholdGap:
 
 
 @dataclass(frozen=True, slots=True)
+class SymbolCloseOutcome:
+    """One alerted symbol's day close vs the alert(s) it fired."""
+
+    symbol: str
+    direction: str
+    prev_close: float
+    close_price: float
+    close_change_pct: float
+    thresholds_fired: tuple[float, ...]
+    alert_change_pct: float  # change% on the last (highest) alert for this dir
+
+
+@dataclass(frozen=True, slots=True)
 class DayReport:
     report_date: date
     events: list[Alert]
@@ -36,6 +52,9 @@ class DayReport:
     asm_alert_count: int
     multi_level: list[tuple[str, str, list[Alert]]]
     gaps: list[ThresholdGap]
+    symbol_closes: list[SymbolCloseOutcome]
+    closed_above_by_threshold: dict[float, dict[str, int]]
+    close_prices_source: str  # "kite" | "events_ltp" | "none"
 
 
 def load_events(state_path: Path, *, as_of: date | None = None) -> list[Alert]:
@@ -56,7 +75,47 @@ def load_events(state_path: Path, *, as_of: date | None = None) -> list[Alert]:
     return out
 
 
-def build_day_report(events: list[Alert], *, report_date: date | None = None) -> DayReport:
+def fetch_eod_closes_kite(
+    kite: Any,
+    symbols: list[str],
+) -> dict[str, float]:
+    """Return last traded / day price per symbol via Kite quote batches."""
+    from nse_alert.universe import _quote_batches
+
+    if not symbols:
+        return {}
+    quote_map = _quote_batches(kite, sorted({s.upper() for s in symbols}))
+    out: dict[str, float] = {}
+    for sym in symbols:
+        q = quote_map.get(f"NSE:{sym.upper()}", {}) or {}
+        ohlc = q.get("ohlc") or {}
+        # Prefer day's close when present; else LTP (fine after hours / last tick)
+        close = float(ohlc.get("close") or 0.0)
+        last = float(q.get("last_price") or 0.0)
+        px = last if last > 0 else close
+        if px > 0:
+            out[sym.upper()] = px
+    return out
+
+
+def _closes_from_events(events: list[Alert]) -> dict[str, float]:
+    """Fallback: use the highest LTP seen on any alert for that symbol today."""
+    best: dict[str, float] = {}
+    for a in events:
+        sym = a.symbol.upper()
+        prev = best.get(sym)
+        if prev is None or a.ltp > prev:
+            best[sym] = a.ltp
+    return best
+
+
+def build_day_report(
+    events: list[Alert],
+    *,
+    report_date: date | None = None,
+    eod_closes: dict[str, float] | None = None,
+    close_prices_source: str = "none",
+) -> DayReport:
     day = report_date or date.today()
     counts_by_threshold: Counter[float] = Counter()
     counts_by_direction: Counter[str] = Counter()
@@ -102,6 +161,57 @@ def build_day_report(events: list[Alert], *, report_date: date | None = None) ->
         thr: dict(dirs) for thr, dirs in sorted(thr_dir.items())
     }
 
+    # Resolve close prices
+    source = close_prices_source
+    closes = {k.upper(): float(v) for k, v in (eod_closes or {}).items() if v and float(v) > 0}
+    if not closes and events:
+        closes = _closes_from_events(events)
+        source = "events_ltp" if closes else "none"
+    elif closes and source == "none":
+        source = "provided"
+
+    symbol_closes: list[SymbolCloseOutcome] = []
+    closed_above: dict[float, Counter[str]] = defaultdict(Counter)
+
+    if closes:
+        for (symbol, direction), group in sorted(by_symbol_dir.items()):
+            group_sorted = sorted(group, key=lambda a: a.threshold_pct)
+            close_px = closes.get(symbol.upper())
+            if close_px is None or close_px <= 0:
+                continue
+            prev = float(group_sorted[0].prev_close)
+            if prev <= 0:
+                continue
+            close_chg = (close_px / prev - 1.0) * 100.0
+            close_chg = round(close_chg, 4)
+            thrs = tuple(a.threshold_pct for a in group_sorted)
+            last_alert = group_sorted[-1]
+            symbol_closes.append(
+                SymbolCloseOutcome(
+                    symbol=symbol,
+                    direction=direction,
+                    prev_close=prev,
+                    close_price=close_px,
+                    close_change_pct=close_chg,
+                    thresholds_fired=thrs,
+                    alert_change_pct=float(last_alert.change_pct),
+                )
+            )
+            for thr in thrs:
+                if direction == "UP" and close_chg + 1e-9 >= thr:
+                    closed_above[thr]["UP"] += 1
+                elif direction == "DOWN" and close_chg - 1e-9 <= -thr:
+                    closed_above[thr]["DOWN"] += 1
+
+    # Sort closes: UP first by close %, then DOWN
+    symbol_closes.sort(
+        key=lambda r: (
+            0 if r.direction == "UP" else 1,
+            -abs(r.close_change_pct),
+            r.symbol,
+        )
+    )
+
     return DayReport(
         report_date=day,
         events=events,
@@ -114,6 +224,11 @@ def build_day_report(events: list[Alert], *, report_date: date | None = None) ->
         asm_alert_count=asm_alert_count,
         multi_level=multi_level,
         gaps=gaps,
+        symbol_closes=symbol_closes,
+        closed_above_by_threshold={
+            thr: dict(dirs) for thr, dirs in sorted(closed_above.items())
+        },
+        close_prices_source=source,
     )
 
 
@@ -170,6 +285,46 @@ def format_day_report(report: DayReport, *, max_gap_rows: int = 40) -> str:
             up = dirs.get("UP", 0)
             down = dirs.get("DOWN", 0)
             lines.append(f"  ±{thr:g}%  →  UP={up}  DOWN={down}  (total {total})")
+
+    lines.append("")
+    lines.append("Closed still at/above alert level (unique scrips):")
+    if not report.closed_above_by_threshold and not report.symbol_closes:
+        lines.append("  (no close prices available)")
+    elif not report.closed_above_by_threshold:
+        lines.append("  (none held the level into the close)")
+    else:
+        # Show every threshold that had alerts, even if close-hold count is 0
+        for thr in report.counts_by_threshold:
+            held = report.closed_above_by_threshold.get(thr, {})
+            up = held.get("UP", 0)
+            down = held.get("DOWN", 0)
+            fired_up = report.counts_by_threshold_direction.get(thr, {}).get("UP", 0)
+            fired_down = report.counts_by_threshold_direction.get(thr, {}).get("DOWN", 0)
+            lines.append(
+                f"  ±{thr:g}%  →  UP closed≥level: {up}/{fired_up}  "
+                f"DOWN closed≤-level: {down}/{fired_down}"
+            )
+        src = report.close_prices_source
+        if src == "events_ltp":
+            lines.append(
+                "  (close ≈ last alert LTP — run report with Kite token after close for true EOD)"
+            )
+        elif src == "kite":
+            lines.append("  (close from Kite quote LTP/OHLC)")
+
+    lines.append("")
+    lines.append("Per-scrip close after alert:")
+    if not report.symbol_closes:
+        lines.append("  (none)")
+    else:
+        for row in report.symbol_closes:
+            thr_label = ",".join(f"{t:g}" for t in row.thresholds_fired)
+            lines.append(
+                f"  {row.symbol} {row.direction}  "
+                f"alerted ±{thr_label}% (at {row.alert_change_pct:+.2f}%)  →  "
+                f"close {row.close_change_pct:+.2f}% "
+                f"(prev={row.prev_close:.2f} close={row.close_price:.2f})"
+            )
 
     lines.append("")
     lines.append(

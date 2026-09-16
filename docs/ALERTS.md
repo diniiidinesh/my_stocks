@@ -86,8 +86,12 @@ Includes:
 - **Positive movers (UP):** unique symbols + alert count
 - **Negative movers (DOWN):** unique symbols + alert count
 - Per-threshold **UP / DOWN** counts
+- **Closed still at/above alert level:** per threshold, how many unique scrips still held the level into the close (UP close≥thr / DOWN close≤−thr), shown as `held/fired`
+- **Per-scrip close after alert:** each alerted name’s day close % vs prev close (and the % when it last alerted)
 - ASM-tagged alert count (if any)
 - Multi-level time gaps (IST)
+
+Close prices come from **Kite quotes** when `KITE_*` is set; otherwise the report falls back to the last alert LTP (noted in the text). For a true EOD close, run `nse-alert report` after market close with a valid token.
 
 ## Universe (what is watched)
 

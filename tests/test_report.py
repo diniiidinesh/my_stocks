@@ -29,7 +29,12 @@ def test_day_report_counts_and_gaps() -> None:
         Alert("AAA", 112, 100, 12.0, "UP", 11.0, t0 + timedelta(minutes=40)),
         Alert("BBB", 86, 100, -14.0, "DOWN", 11.0, t0 + timedelta(hours=1), is_asm=True),
     ]
-    report = build_day_report(events, report_date=date(2026, 9, 15))
+    report = build_day_report(
+        events,
+        report_date=date(2026, 9, 15),
+        eod_closes={"AAA": 110.0, "BBB": 88.0},
+        close_prices_source="kite",
+    )
     assert report.counts_by_threshold == {4.0: 1, 7.0: 1, 11.0: 2}
     assert report.counts_by_threshold_direction[11.0] == {"UP": 1, "DOWN": 1}
     assert report.unique_symbols == 2
@@ -41,6 +46,14 @@ def test_day_report_counts_and_gaps() -> None:
     assert report.gaps[0].gap == timedelta(minutes=12)
     assert report.gaps[1].gap == timedelta(minutes=28)
 
+    # AAA closed +10%: still above 4 and 7, not 11. BBB closed -12%: still above 11 DOWN.
+    assert report.closed_above_by_threshold[4.0]["UP"] == 1
+    assert report.closed_above_by_threshold[7.0]["UP"] == 1
+    assert report.closed_above_by_threshold.get(11.0, {}).get("UP", 0) == 0
+    assert report.closed_above_by_threshold[11.0]["DOWN"] == 1
+    aaa = next(r for r in report.symbol_closes if r.symbol == "AAA")
+    assert abs(aaa.close_change_pct - 10.0) < 1e-9
+
     text = format_day_report(report)
     assert "Positive movers (UP):   1 symbols, 3 alerts" in text
     assert "Negative movers (DOWN): 1 symbols, 1 alerts" in text
@@ -49,3 +62,16 @@ def test_day_report_counts_and_gaps() -> None:
     assert "Alerts tagged ASM: 1" in text
     assert "AAA UP" in text
     assert "12m" in text
+    assert "Closed still at/above alert level" in text
+    assert "UP closed≥level: 1/1" in text
+    assert "Per-scrip close after alert:" in text
+    assert "close +10.00%" in text
+
+
+def test_day_report_fallback_uses_alert_ltp() -> None:
+    t0 = datetime(2026, 9, 15, 4, 0, tzinfo=timezone.utc)
+    events = [Alert("CCC", 113.0, 100.0, 13.0, "UP", 13.0, t0)]
+    report = build_day_report(events, report_date=date(2026, 9, 15))
+    assert report.close_prices_source == "events_ltp"
+    assert abs(report.symbol_closes[0].close_change_pct - 13.0) < 1e-9
+    assert report.closed_above_by_threshold[13.0]["UP"] == 1

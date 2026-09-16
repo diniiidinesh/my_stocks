@@ -382,10 +382,32 @@ def _confirm_pending(
         tg.send_text(msg)
 
 
+def _resolve_eod_closes(settings: Settings, events: list) -> tuple[dict[str, float], str]:
+    """Fetch EOD closes via Kite when possible; else fall back inside build_day_report."""
+    from nse_alert.engine import Alert as AlertType
+    from nse_alert.report import fetch_eod_closes_kite
+
+    symbols = sorted({a.symbol for a in events if isinstance(a, AlertType)})
+    if not symbols:
+        return {}, "none"
+    if settings.kite_api_key and settings.kite_access_token:
+        try:
+            kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+            closes = fetch_eod_closes_kite(kite, symbols)
+            if closes:
+                return closes, "kite"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not fetch EOD closes via Kite: %s", exc)
+    return {}, "none"
+
+
 def _emit_day_report(settings: Settings, *, telegram: bool) -> None:
     state_path = settings.state_dir / "fired.json"
     events = load_events(state_path)
-    report = build_day_report(events)
+    closes, source = _resolve_eod_closes(settings, events)
+    report = build_day_report(
+        events, eod_closes=closes or None, close_prices_source=source
+    )
     text = format_day_report(report)
     out_path = settings.state_dir / f"report-{report.report_date.isoformat()}.txt"
     write_day_report(report, out_path)
@@ -424,7 +446,13 @@ def report_cmd(report_date: object | None, telegram: bool) -> None:
     )
     state_path = settings.state_dir / "fired.json"
     events = load_events(state_path, as_of=day)
-    report = build_day_report(events, report_date=day)
+    closes, source = _resolve_eod_closes(settings, events)
+    report = build_day_report(
+        events,
+        report_date=day,
+        eod_closes=closes or None,
+        close_prices_source=source,
+    )
     text = format_day_report(report)
     out_path = settings.state_dir / f"report-{day.isoformat()}.txt"
     write_day_report(report, out_path)
