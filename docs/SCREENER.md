@@ -66,6 +66,9 @@ All `SCREEN_*` keys are in [../.env.example](../.env.example). Toggle optional f
 Optional market-cap override CSV: `SCREEN_MARKET_CAP_FILE` with columns
 `symbol,market_cap_cr`.
 
+Optional symbol list for this command only: `SCREEN_CUSTOM_UNIVERSE_FILE`
+(does **not** reuse the watcher’s `CUSTOM_UNIVERSE_FILE`).
+
 ## Related
 
 - Intraday alerts: [ALERTS.md](ALERTS.md)  
