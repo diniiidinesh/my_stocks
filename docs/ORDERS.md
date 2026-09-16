@@ -13,7 +13,7 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_STOP_LIMIT_TICKS` | `2` | Limit = trigger − N×₹0.05 |
 | `TRADE_QTY` | `1` | Shares per order |
 | `TRADE_PRODUCT` | `CNC` | Delivery |
-| `TRADE_MAX_ORDERS_PER_DAY` | `3` | Entry-order cap (stops excluded) |
+| `TRADE_MAX_ORDERS_PER_DAY` | `10` | Entry-order cap (stops excluded) |
 
 Flow: **+13% UP alert** → market **BUY** → attach **SL (stop-loss limit) SELL** with trigger at **2% below** entry and limit a few ticks lower.  
 Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY` (that cap is for entries only).  

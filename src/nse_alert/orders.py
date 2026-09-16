@@ -227,7 +227,7 @@ class OrderExecutor:
         product: str = "CNC",
         order_type: str = "MARKET",
         market_protection: int = 2,
-        max_orders_per_day: int = 3,
+        max_orders_per_day: int = 10,
         trade_on_thresholds: list[float] | None = None,
         trade_sides: str = "up",
         stop_loss_pct: float = 2.0,
