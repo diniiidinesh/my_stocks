@@ -275,6 +275,9 @@ class OrderExecutor:
         stop_wait_sec: float = 20.0,
         trail_breakeven: bool = True,
         trail_breakeven_pct: float = 2.0,
+        sizing_mode: str = "margin",  # margin | fixed
+        margin_budget_inr: float = 10_000.0,
+        fallback_leverage: float = 5.0,
         book: OrderBook | None = None,
     ) -> None:
         self.api_key = api_key
@@ -294,6 +297,10 @@ class OrderExecutor:
         self.stop_wait_sec = max(1.0, float(stop_wait_sec))
         self.trail_breakeven = trail_breakeven
         self.trail_breakeven_pct = abs(float(trail_breakeven_pct))
+        mode_raw = (sizing_mode or "margin").strip().lower()
+        self.sizing_mode = mode_raw if mode_raw in {"margin", "fixed"} else "margin"
+        self.margin_budget_inr = max(0.0, float(margin_budget_inr))
+        self.fallback_leverage = max(1.0, float(fallback_leverage))
         self.book = book
 
     def enabled(self) -> bool:
@@ -314,6 +321,91 @@ class OrderExecutor:
 
     def side_for_direction(self, direction: str) -> TransactionSide:
         return "BUY" if direction == "UP" else "SELL"
+
+    def _margin_for_quantity(
+        self,
+        *,
+        symbol: str,
+        side: TransactionSide,
+        quantity: int,
+        price: float | None = None,
+    ) -> tuple[float, float]:
+        """Return (required_margin_inr, leverage) for one MIS order via Kite."""
+        kite = self._kite()
+        params: dict[str, Any] = {
+            "exchange": kite.EXCHANGE_NSE,
+            "tradingsymbol": symbol.upper(),
+            "transaction_type": (
+                kite.TRANSACTION_TYPE_BUY if side == "BUY" else kite.TRANSACTION_TYPE_SELL
+            ),
+            "variety": kite.VARIETY_REGULAR,
+            "product": kite.PRODUCT_MIS if self.product != "CNC" else kite.PRODUCT_CNC,
+            "order_type": kite.ORDER_TYPE_MARKET,
+            "quantity": max(1, int(quantity)),
+        }
+        if price is not None and price > 0:
+            # Helps margin calc for MARKET outside hours in some cases
+            params["price"] = float(price)
+        detail = kite.order_margins([params])
+        row = detail[0] if isinstance(detail, list) and detail else detail
+        if not isinstance(row, dict):
+            raise RuntimeError(f"Unexpected order_margins response: {detail!r}")
+        total = float(row.get("total") or 0.0)
+        leverage = float(row.get("leverage") or 0.0)
+        return total, leverage
+
+    def size_quantity(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        side: TransactionSide = "BUY",
+        quantity: int | None = None,
+    ) -> tuple[int, str]:
+        """Pick share count from fixed qty or ~TRADE_MARGIN_INR of real margin.
+
+        ``margin`` mode: query Kite MIS margin for 1 share, then
+        ``qty = floor(budget / margin_per_share)`` so deployed capital ≈ budget
+        at that stock's leverage. Falls back to ``price / fallback_leverage``
+        when margins API is unavailable (e.g. dry_run without token).
+        """
+        if quantity is not None:
+            qty = max(1, int(quantity))
+            return qty, f"explicit qty={qty}"
+
+        if self.sizing_mode == "fixed" or self.margin_budget_inr <= 0:
+            return self.default_qty, f"fixed TRADE_QTY={self.default_qty}"
+
+        budget = self.margin_budget_inr
+        px = max(float(price), NSE_TICK)
+
+        try:
+            margin_1, leverage = self._margin_for_quantity(
+                symbol=symbol, side=side, quantity=1, price=px
+            )
+            if margin_1 <= 0:
+                raise RuntimeError("order_margins returned non-positive total")
+            qty = max(1, int(budget // margin_1))
+            notional = qty * px
+            eff_lev = (notional / (qty * margin_1)) if margin_1 > 0 else leverage
+            if leverage <= 0:
+                leverage = eff_lev
+            note = (
+                f"margin≈₹{budget:.0f} → {qty} shares @≈{px:.2f} "
+                f"(~₹{margin_1:.0f}/sh, lev≈{leverage:.2f}x, notional≈₹{notional:.0f})"
+            )
+            return qty, note
+        except Exception as exc:  # noqa: BLE001
+            # Approximate: budget * leverage / price
+            qty = max(1, int((budget * self.fallback_leverage) // px))
+            notional = qty * px
+            note = (
+                f"margin-size fallback ({exc!s}): "
+                f"lev={self.fallback_leverage:g}x → {qty} shares "
+                f"(notional≈₹{notional:.0f} for budget ₹{budget:.0f})"
+            )
+            logger.warning("%s", note)
+            return qty, note
 
     def stop_price_from_entry(self, entry: float) -> float:
         """Trigger price for the downside stop (entry × (1 − stop_loss_pct/100))."""
@@ -500,10 +592,14 @@ class OrderExecutor:
         direction: str,
         threshold_pct: float,
         change_pct: float,
+        entry_ltp: float = 0.0,
         quantity: int | None = None,
     ) -> OrderRequest:
         side = self.side_for_direction(direction)
-        qty = quantity if quantity is not None else self.default_qty
+        px = float(entry_ltp) if entry_ltp and entry_ltp > 0 else 0.0
+        qty, size_note = self.size_quantity(
+            symbol=symbol, price=px or 1.0, side=side, quantity=quantity
+        )
         return OrderRequest(
             symbol=symbol,
             side=side,
@@ -516,7 +612,7 @@ class OrderExecutor:
             tag="nsealrt",
             reason=(
                 f"alert {direction} ±{threshold_pct:g}% (now {change_pct:+.2f}%); "
-                f"SL {self.stop_loss_pct:g}% below entry"
+                f"SL {self.stop_loss_pct:g}% below entry; {size_note}"
             ),
         )
 

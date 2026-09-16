@@ -11,17 +11,22 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_SIDES` | `up` | BUY on UP only |
 | `TRADE_STOP_LOSS_PCT` | `2` | SL trigger ≈ entry × 0.98 |
 | `TRADE_STOP_LIMIT_TICKS` | `2` | Limit = trigger − N×₹0.05 |
-| `TRADE_QTY` | `1` | Shares per order |
+| `TRADE_QTY` | `1` | Used when `TRADE_SIZING=fixed` (or as explicit override) |
+| `TRADE_SIZING` | `margin` | `margin` = ~`TRADE_MARGIN_INR` of real MIS margin; `fixed` = `TRADE_QTY` |
+| `TRADE_MARGIN_INR` | `10000` | Target capital / margin budget (₹) for MIS entries |
+| `TRADE_FALLBACK_LEVERAGE` | `5` | Offline estimate when Kite margins API unavailable |
 | `TRADE_PRODUCT` | `MIS` | Intraday (required for same-day sell-SL) |
 | `TRADE_STOP_WAIT_SEC` | `20` | Wait for entry fill before SL (live) |
 | `TRADE_TRAIL_BREAKEVEN` | `true` | Move SL to entry when LTP rises enough |
 | `TRADE_TRAIL_BREAKEVEN_PCT` | `2` | Arm cost-to-cost trail at entry × 1.02 |
 | `TRADE_MAX_ORDERS_PER_DAY` | `10` | Entry-order cap (stops excluded) |
 
-Flow: **+13% UP alert** → **MIS** market **BUY** → wait for fill → attach **SL (stop-loss limit) SELL** with trigger at **2% below fill price** and limit a few ticks lower.  
+Flow: **+13% UP alert** → size MIS **BUY** so required margin ≈ `TRADE_MARGIN_INR` (per-stock leverage from Kite `order_margins`) → wait for fill → attach **SL (stop-loss limit) SELL** with trigger at **2% below fill price** and limit a few ticks lower.  
 On each tick, if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), the stop is **modified** to entry (cost-to-cost).  
 Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY` (that cap is for entries only).  
 One open position per symbol/day.
+
+**Sizing:** `qty = floor(TRADE_MARGIN_INR / margin_per_share)`. Example: ₹10,000 budget, stock needs ₹2,000 margin/share at its MIS leverage → **5 shares**. Notional = qty × price (larger than ₹10k when leveraged).
 
 **Why MIS?** CNC sell-SL right after a buy often fails — you need holdings; same-day exit needs intraday product.
 
