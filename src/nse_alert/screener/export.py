@@ -15,25 +15,16 @@ def write_screener_excel(result: ScreenResult, path: Path) -> Path:
     if df.empty:
         df = pd.DataFrame(columns=["symbol", "all_pass", "mandatory_pass", "optional_score"])
 
-    # Preferred column order for readability
+    # Values first; pass/fail flags on the right for scanning
     preferred = [
-        "all_pass",
-        "mandatory_pass",
-        "optional_score",
-        "optional_total",
         "symbol",
         "name",
         "close",
         "market_cap_cr",
         "turnover_cr",
         "pct_from_52w_high",
-        "pass_ema_stack",
-        "pass_supertrend",
-        "pass_volume",
-        "pass_adx",
-        "pass_rsi",
-        "pass_macd",
-        "pass_near_52w",
+        "optional_score",
+        "optional_total",
         "ema_fast",
         "ema_mid",
         "ema_slow",
@@ -49,6 +40,15 @@ def write_screener_excel(result: ScreenResult, path: Path) -> Path:
         "vol_spike_days",
         "vol_spike_detail",
         "as_of",
+        "all_pass",
+        "mandatory_pass",
+        "pass_ema_stack",
+        "pass_supertrend",
+        "pass_volume",
+        "pass_adx",
+        "pass_rsi",
+        "pass_macd",
+        "pass_near_52w",
     ]
     cols = [c for c in preferred if c in df.columns] + [
         c for c in df.columns if c not in preferred
