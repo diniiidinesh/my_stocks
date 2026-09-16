@@ -93,6 +93,19 @@ Includes:
 
 Close prices come from **Kite quotes** when `KITE_*` is set; otherwise the report falls back to the last alert LTP (noted in the text). For a true EOD close, run `nse-alert report` after market close with a valid token.
 
+**Login impact:** none for report formatting — same daily token; Kite closes need a valid token.
+
+### Example snippets
+
+```text
+Closed still at/above alert level (unique scrips):
+  ±7%  →  UP closed≥level: 3/5  DOWN closed≤-level: 1/2
+  (close from Kite quote LTP/OHLC)
+
+Per-scrip close after alert:
+  AAA UP  alerted ±4,7% (at +8.20%)  →  close +6.10% (prev=100.00 close=106.10)
+```
+
 ## Universe (what is watched)
 
 Live default (no NSE website scrape):
@@ -116,5 +129,5 @@ Large whole-market `quote` batches often hit Cloudflare; the sample file avoids 
 | `engine.py` | Thresholds, FO-only gate, ASM/F&O flags on `Alert` |
 | `surveillance.py` | NFO underlyings + ASM sheet fetch |
 | `universe.py` | Cash EQ instruments + quote screen |
-| `report.py` | EOD UP/DOWN counts and gaps |
+| `report.py` | EOD UP/DOWN counts, per-scrip close %, hold-level counts, gaps |
 | `notify/telegram.py` | Message formatting |

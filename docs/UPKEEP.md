@@ -6,10 +6,11 @@ Use this checklist whenever you change behaviour users (or future-you) need to k
 
 | Code change | Update these |
 |-------------|--------------|
-| New / renamed env var | `.env.example` + any doc that lists env vars ([ALERTS](ALERTS.md), [ORDERS](ORDERS.md), [LOGIN](LOGIN.md)) |
+| New / renamed env var | `.env.example` + any doc that lists env vars ([ALERTS](ALERTS.md), [ORDERS](ORDERS.md), [SCREENER](SCREENER.md), [LOGIN](LOGIN.md)) |
 | Alert rules (thresholds, F&O, ASM, report shape) | [ALERTS.md](ALERTS.md), short blurb in [../README.md](../README.md) |
 | Login / redirect / token flow | [LOGIN.md](LOGIN.md) — if **unchanged**, say so in the PR description |
-| Trading modes / SL / caps | [ORDERS.md](ORDERS.md), `.env.example` |
+| Trading modes / SL / sizing / caps | [ORDERS.md](ORDERS.md), [TESTING_ORDERS.md](TESTING_ORDERS.md), `.env.example` |
+| EOD TA screener filters / Excel | [SCREENER.md](SCREENER.md), `.env.example`, [../deploy/CLOUD.md](../deploy/CLOUD.md) cron if needed |
 | Order test plan / handoff checklist | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Deploy / ports / IP whitelist | [../deploy/CLOUD.md](../deploy/CLOUD.md) |
 | Provider cost / free tier advice | [../deploy/COST.md](../deploy/COST.md) |

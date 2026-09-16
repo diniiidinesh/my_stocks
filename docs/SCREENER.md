@@ -2,6 +2,10 @@
 
 Daily-chart screener, **separate** from intraday ±% alerts and MIS orders.
 
+**Login impact:** none required for Yahoo history/market-cap; Kite token improves history + turnover filter. Delivery % comes from NSE bhavcopy (no Kite).
+
+All indicators use the **daily** chart only (Kite `"day"` / Yahoo `1d`).
+
 ## What it does
 
 1. Builds a universe from **Nifty 500 ∪ Smallcap 250**, then keeps names with
@@ -9,7 +13,9 @@ Daily-chart screener, **separate** from intraday ±% alerts and MIS orders.
    **turnover ≥ `SCREEN_MIN_TURNOVER_CR`** (default ₹10 Cr via Kite quotes).
 2. Pulls **daily OHLCV** (Kite historical when logged in, else Yahoo) and caches under
    `STATE_DIR/screener/history/`.
-3. Scores each name and writes an Excel workbook + Telegram summary **after 15:40 IST**.
+3. Loads NSE **full bhavcopy** for delivery % on volume-spike days
+   (`STATE_DIR/screener/bhavcopy/`).
+4. Scores each name and writes an Excel workbook + Telegram summary **after 15:40 IST**.
 
 ## Rules
 
@@ -17,20 +23,31 @@ Daily-chart screener, **separate** from intraday ±% alerts and MIS orders.
 |------|---------|------|
 | Price > SuperTrend (10, 3) | on | **Mandatory** |
 | EMA20 > EMA50 > EMA200 | on | **Mandatory** |
-| Volume > 1.5× volume EMA on any of last 20 sessions | on | Optional (`SCREEN_REQUIRE_VOLUME`) |
+| Volume > 1.5× **volume EMA** on any of last 20 sessions | on | Optional (`SCREEN_REQUIRE_VOLUME`) |
 | ADX(14) > 25 | on | Optional |
 | RSI(14) between 40–60 | on | Optional |
 | MACD line > 0 | on | Optional |
 | Within X% of 52-week high | 5% | Optional |
 | Delivery ≥ Y% on a volume-spike day | 40% | Optional (`SCREEN_REQUIRE_DELIVERY`) |
 
-Volume spikes list **every** hit in the lookback window as `T-0` (latest bar), `T-1`, … with the multiple and absolute volume vs EMA.
+### Volume spikes
 
-Delivery uses NSE full bhavcopy (`DELIV_PER`). **Pass if any spike day** with known delivery is ≥ `SCREEN_MIN_DELIVERY_PCT`. Days with missing delivery are **ignored**. Excel columns: `deliv_pct_max_on_spikes`, `deliv_spike_days`, `deliv_spike_detail`, `pass_delivery`.
+- Compare each session’s volume to that day’s **volume EMA** (`SCREEN_VOLUME_EMA_PERIOD`, default 20).
+- Spike if `volume > SCREEN_VOLUME_MULT × volume_EMA` (default **1.5×**).
+- Look back `SCREEN_LOOKBACK_DAYS` sessions; list **every** hit as `T-0`, `T-1`, … with multiple and vol vs EMA.
+
+### Delivery (optional)
+
+- NSE full bhavcopy `DELIV_PER` for each spike date.
+- **Pass if any** spike day with known delivery is ≥ `SCREEN_MIN_DELIVERY_PCT`.
+- Days with missing delivery are **ignored**.
+- Excel: `deliv_pct_max_on_spikes`, `deliv_spike_days`, `deliv_spike_detail`, `pass_delivery`.
+
+Same-day (`T-0`) delivery may be unavailable until the evening bhavcopy is published.
 
 ## Ranking (Excel)
 
-Sheets are ordered so **`all_pass` (every enabled filter) names sit at the top**:
+**Values first; pass/fail flags on the right.** Rows sorted:
 
 1. `all_pass` first  
 2. then `mandatory_pass`  
@@ -57,7 +74,7 @@ Telegram (when `TELEGRAM_*` is set) receives a short summary **and** the `.xlsx`
 ### Cron (Lightsail, IST)
 
 ```cron
-15 16 * * 1-5  cd /opt/nse-alert && /usr/local/bin/uv run nse-alert screen >> /var/log/nse-screen.log 2>&1
+15 16 * * 1-5  cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1
 ```
 
 Refresh the Kite access token on trading days if you prefer Kite history (`SCREEN_PREFER_KITE_HISTORY=true`).
@@ -79,4 +96,5 @@ Optional symbol list for this command only: `SCREEN_CUSTOM_UNIVERSE_FILE`
 
 - Intraday alerts: [ALERTS.md](ALERTS.md)  
 - Orders: [ORDERS.md](ORDERS.md)  
+- Deploy cron: [../deploy/CLOUD.md](../deploy/CLOUD.md)  
 - Code: `src/nse_alert/screener/`

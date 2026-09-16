@@ -23,7 +23,7 @@ Related docs: [ORDERS.md](ORDERS.md).
 Command:
 
 ```bash
-uv run pytest -q tests/test_orders.py tests/test_engine.py
+uv run pytest -q tests/test_orders.py tests/test_engine.py tests/test_report.py
 ```
 
 | ID | Case | Expected | Covered by |
@@ -39,10 +39,13 @@ uv run pytest -q tests/test_orders.py tests/test_engine.py
 | TC-LIVE-MOCK-01 | `auto` with fake Kite (cap=1) | MARKET BUY then SL SELL with trigger+limit | `test_tc_live_mock_auto_places_market_then_sl_limit` |
 | TC-LIVE-MOCK-02 | Kite raises | Failure result, no crash | `test_tc_live_mock_kite_error_returns_failure` |
 | TC-LIVE-MOCK-03 | Missing credentials | Failure mentioning keys | `test_tc_live_requires_credentials` |
+| TC-SIZE-01 | Margin sizing via fake `order_margins` | qty = budget / margin_per_share | `test_tc_margin_sizing_uses_order_margins` |
+| TC-SIZE-02 | Margins API unavailable | Fallback leverage × budget / price | `test_tc_margin_sizing_fallback_leverage` |
 | TC-CONFIRM-01 | Pending add / cancel / list | Lifecycle ok | `test_tc_confirm_pending_lifecycle` |
 | TC-CONFIRM-02 | Pending TTL expired | Dropped from list, status expired | `test_tc_confirm_pending_expires` |
 | TC-CONFIRM-03 | Telegram CONFIRM/CANCEL regex | Parses ids; ignores junk | `test_tc_confirm_telegram_regex` |
 | TC-BOOK-01 | New calendar day | `placed_count` resets | `test_tc_book_resets_on_new_calendar_day` |
+| TC-REPORT-01 | EOD close % + hold counts | Close section + held/fired | `tests/test_report.py` |
 
 ### Local mock end-to-end (no Kite money)
 
@@ -76,7 +79,7 @@ You must run these on your machine / Lightsail VM with a real Kite session.
 
 1. Paid Kite Connect + valid **today’s** `KITE_ACCESS_TOKEN` (`nse-alert login`).
 2. Static IP **whitelisted** on Kite (required for live orders from Apr 2026).
-3. Funds / margin enough for **1 share MIS** of a liquid name (or keep `dry_run` until ready).
+3. Funds / margin enough for about **`TRADE_MARGIN_INR`** of MIS (default ₹10k), or keep `dry_run` until ready. Use `TRADE_SIZING=fixed` + `TRADE_QTY=1` for the smallest live test.
 4. Prefer market hours (9:15–15:30 IST) for live placement.
 5. Start with **`TRADE_MODE=dry_run`** on the VM once, then **`confirm`**, only then **`auto`**.
 
@@ -84,15 +87,17 @@ You must run these on your machine / Lightsail VM with a real Kite session.
 
 | ID | Steps | Pass criteria | Risk |
 |----|-------|---------------|------|
-| TC-HAND-01 | VM: `TRADE_MODE=dry_run`, live `FEED_MODE=kite`, small universe | Real +13% (or wait) produces dry-run Telegram/log only; **no** order in Kite order book | None |
-| TC-HAND-02 | `TRADE_MODE=confirm`, force a pending via alert or simulate | Telegram shows `CONFIRM <id>`; `pending` lists it; `CANCEL` removes it | None until confirm |
-| TC-HAND-03 | Confirm a pending with **qty=1** on a cheap liquid name | Kite shows MARKET BUY + SL (limit) SELL; app records position | **Real money** |
-| TC-HAND-04 | `TRADE_MODE=auto`, qty=1, `TRADE_MAX_ORDERS_PER_DAY=1` | On first +13% UP: auto BUY+SL without confirm; second symbol blocked by cap/position rules | **Real money** |
+| TC-HAND-01 | VM: `TRADE_MODE=dry_run`, live `FEED_MODE=kite`, small universe | Real +13% (or wait) produces dry-run Telegram/log only; **no** order in Kite; sizing note shows qty for ~₹10k margin | None |
+| TC-HAND-02 | `TRADE_MODE=confirm`, force a pending via alert or simulate | Telegram shows `CONFIRM <id>` with qty + sizing; `pending` lists it; `CANCEL` removes it | None until confirm |
+| TC-HAND-03 | Confirm a pending (margin-sized or fixed qty=1) on a liquid name | Kite shows MIS MARKET BUY + SL-Limit SELL; fill then SL; app records position | **Real money** |
+| TC-HAND-04 | `TRADE_MODE=auto`, `TRADE_MAX_ORDERS_PER_DAY=1` | On first +13% UP: auto BUY+SL without confirm; second symbol blocked by cap/position rules | **Real money** |
 | TC-HAND-05 | ASM-tagged name alerts | Tag appears; if you try live buy, Kite may **reject** ASM (expected broker behaviour) | Awareness |
 | TC-HAND-06 | Wrong / expired token | Live place fails with clear error; watch may also fail auth | None |
 | TC-HAND-07 | IP not whitelisted | Order API error from Zerodha; alerts may still work | None |
 | TC-HAND-08 | Restart mid-day with open position in `orders.json` | Second BUY same symbol still blocked | None |
-| TC-HAND-09 | SL trigger behaviour | If price falls to trigger, SL-Limit activates (observe in Kite) — app does not manage fill beyond placement | Market |
+| TC-HAND-09 | SL trigger behaviour | If price falls to trigger, SL-Limit activates (observe in Kite) | Market |
+| TC-HAND-10 | Cost-to-cost trail | After entry, LTP ≥ entry×1.02 → Telegram trail msg; Kite SL trigger ≈ entry | Market |
+| TC-HAND-11 | EOD report | After alerts: `nse-alert report` shows close % per scrip + held/fired counts | None |
 
 ### Suggested live `.env` (minimal risk)
 
@@ -104,6 +109,9 @@ TRADE_MODE=dry_run
 TRADE_ON_THRESHOLDS=13
 TRADE_SIDES=up
 TRADE_STOP_LOSS_PCT=2
+TRADE_SIZING=margin
+TRADE_MARGIN_INR=10000
+TRADE_FALLBACK_LEVERAGE=5
 TRADE_QTY=1
 TRADE_MAX_ORDERS_PER_DAY=10
 TRADE_PRODUCT=MIS
@@ -111,6 +119,13 @@ TRADE_STOP_WAIT_SEC=20
 TRADE_TRAIL_BREAKEVEN=true
 TRADE_TRAIL_BREAKEVEN_PCT=2
 CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt
+```
+
+For the tiniest live order instead:
+
+```env
+TRADE_SIZING=fixed
+TRADE_QTY=1
 ```
 
 Promote only after TC-HAND-01 passes:
@@ -121,9 +136,10 @@ TRADE_MODE=confirm   # then later: auto
 
 ### Evidence to capture when you hand back results
 
-- Screenshot / copy of Telegram dry-run messages  
-- Kite **Orders** page after confirm/auto (order ids)  
+- Screenshot / copy of Telegram dry-run messages (include sizing line)  
+- Kite **Orders** page after confirm/auto (order ids, MIS, qty)  
 - `.nse_alert/orders.json` snippet (redact tokens)  
+- `report-YYYY-MM-DD.txt` close / hold sections  
 - Any error text from failed place (IP / ASM / funds)
 
 ---
@@ -134,6 +150,8 @@ TRADE_MODE=confirm   # then later: auto
 2. Stop is **SL-Limit** on **MIS**: trigger = 2% below **fill price**; limit = trigger − `TRADE_STOP_LIMIT_TICKS` × ₹0.05.  
 3. Live auto waits for entry `COMPLETE` (up to `TRADE_STOP_WAIT_SEC`) before placing SL.  
 4. When LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), stop is modified to entry (cost-to-cost).  
-5. Test strategy is **BUY + downside SL only**; DOWN alerts do not trade when `TRADE_SIDES=up`.  
-6. Confirm path forces place mode `auto` when executor is not `dry_run` (see `_confirm_pending` in `cli.py`).  
-7. Login/token flow is unchanged by order modes — refresh token daily before live tests.
+5. **`TRADE_SIZING=margin`** sizes qty from Kite MIS margin ≈ `TRADE_MARGIN_INR` (not a fixed share count).  
+6. Test strategy is **BUY + downside SL only**; DOWN alerts do not trade when `TRADE_SIDES=up`.  
+7. Confirm path forces place mode `auto` when executor is not `dry_run` (see `_confirm_pending` in `cli.py`).  
+8. Login/token flow is unchanged by order modes — refresh token daily before live tests.  
+9. Screener tests: `uv run pytest -q tests/test_screener.py` (see [SCREENER.md](SCREENER.md)).

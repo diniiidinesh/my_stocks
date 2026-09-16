@@ -94,6 +94,9 @@ TELEGRAM_CHAT_ID=...
 
 # Orders — start with dry_run, then confirm, only then auto
 TRADE_MODE=dry_run
+TRADE_SIZING=margin
+TRADE_MARGIN_INR=10000
+TRADE_FALLBACK_LEVERAGE=5
 TRADE_QTY=1
 TRADE_PRODUCT=MIS
 TRADE_STOP_WAIT_SEC=20
@@ -105,9 +108,16 @@ TRADE_MAX_ORDERS_PER_DAY=10
 TRADE_ON_THRESHOLDS=13
 TRADE_SIDES=up
 TRADE_STOP_LOSS_PCT=2
+
+# Optional EOD screener (see docs/SCREENER.md)
+SCREEN_MIN_MARKET_CAP_CR=5000
+SCREEN_MIN_TURNOVER_CR=10
+SCREEN_REQUIRE_DELIVERY=true
+SCREEN_MIN_DELIVERY_PCT=40
+SCREEN_AFTER_HHMM=1540
 ```
 
-Full env reference: [../.env.example](../.env.example). Alert semantics: [../docs/ALERTS.md](../docs/ALERTS.md).
+Full env reference: [../.env.example](../.env.example). Alert semantics: [../docs/ALERTS.md](../docs/ALERTS.md). Orders: [../docs/ORDERS.md](../docs/ORDERS.md).
 
 ## Daily login (access token)
 
@@ -184,13 +194,19 @@ uv run nse-alert screen
 # smoke: uv run nse-alert screen --force --max-symbols 30 --no-telegram
 ```
 
+Also useful after the session:
+
+```bash
+uv run nse-alert report --telegram   # close % + hold-level counts from today's alerts
+```
+
 Cron example (weekdays 16:15 IST — adjust TZ on the box):
 
 ```cron
 15 16 * * 1-5  cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1
 ```
 
-See [docs/SCREENER.md](../docs/SCREENER.md) for filters and ranking.
+See [docs/SCREENER.md](../docs/SCREENER.md) for filters, delivery %, and ranking.
 
 ## SEBI / Zerodha reminders
 
@@ -198,7 +214,7 @@ See [docs/SCREENER.md](../docs/SCREENER.md) for filters and ranking.
 - WebSocket quotes / alerts alone do **not** need the static IP.
 - Stay under ~10 orders/sec (this app is far below that).
 - Market orders need non-zero **market protection** (`TRADE_MARKET_PROTECTION`).
-- This is not investment advice; start with `dry_run`, tiny `TRADE_QTY`, and `confirm`.
+- This is not investment advice; start with `dry_run`, `TRADE_MARGIN_INR` you can afford (or `TRADE_SIZING=fixed` + tiny `TRADE_QTY`), and `confirm`.
 
 ## Alternative: systemd (no Docker)
 
