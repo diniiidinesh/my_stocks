@@ -37,6 +37,8 @@ Sheets are ordered so **`all_pass` (every enabled filter) names sit at the top**
 
 Sheets: `Summary`, `AllPass`, `MandatoryHits`, `AllRanked`, `Config`.
 
+**Sample (dummy data):** [../samples/sample-eod-screener-report.xlsx](../samples/sample-eod-screener-report.xlsx)
+
 ## Run
 
 ```bash
