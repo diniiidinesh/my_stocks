@@ -74,37 +74,47 @@ def fetch_market_caps_yfinance(
     max_age_hours: float = 24.0,
     sleep_sec: float = 0.05,
 ) -> dict[str, float]:
-    """Return market cap in ₹ crore via Yahoo Finance fast_info."""
+    """Return market cap in ₹ crore via Yahoo Finance fast_info.
+
+    Uses a fresh on-disk cache when present, but still fetches any
+    requested symbols that are missing from that cache (partial smoke
+    caches must not shrink the universe).
+    """
     import yfinance as yf
 
+    out: dict[str, float] = {}
     if cache_path and cache_path.exists():
         age_h = (time.time() - cache_path.stat().st_mtime) / 3600.0
         if age_h <= max_age_hours:
-            cached = load_market_cap_file(cache_path)
-            if cached:
-                logger.info("Using market-cap cache (%d names, age %.1fh)", len(cached), age_h)
-                return cached
+            out = load_market_cap_file(cache_path)
+            if out:
+                logger.info("Loaded market-cap cache (%d names, age %.1fh)", len(out), age_h)
 
-    out: dict[str, float] = {}
-    total = len(symbols)
-    for i, sym in enumerate(symbols, start=1):
+    wanted = [s.upper() for s in symbols]
+    missing = [s for s in wanted if s not in out]
+    if not missing:
+        return {s: out[s] for s in wanted if s in out}
+
+    total = len(missing)
+    logger.info("Fetching market caps for %d symbols (%d already cached)", total, len(out))
+    for i, sym in enumerate(missing, start=1):
         try:
             info = yf.Ticker(f"{sym}.NS").fast_info
             mcap = getattr(info, "market_cap", None)
             if mcap is None and hasattr(info, "get"):
                 mcap = info.get("marketCap") or info.get("market_cap")
             if mcap is not None and float(mcap) > 0:
-                out[sym.upper()] = float(mcap) / 1e7
+                out[sym] = float(mcap) / 1e7
         except Exception as exc:  # noqa: BLE001
             logger.debug("mcap failed for %s: %s", sym, exc)
         if sleep_sec:
             time.sleep(sleep_sec)
         if i % 50 == 0 or i == total:
-            logger.info("Market cap progress %d / %d (ok=%d)", i, total, len(out))
+            logger.info("Market cap progress %d / %d (cache_ok=%d)", i, total, len(out))
 
     if cache_path and out:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(
             [{"symbol": k, "market_cap_cr": v} for k, v in sorted(out.items())]
         ).to_csv(cache_path, index=False)
-    return out
+    return {s: out[s] for s in wanted if s in out}
