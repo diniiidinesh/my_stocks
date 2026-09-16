@@ -91,36 +91,60 @@ def supertrend(
     basic_ub = hl2 + multiplier * atr_vals
     basic_lb = hl2 - multiplier * atr_vals
 
-    final_ub = basic_ub.copy()
-    final_lb = basic_lb.copy()
-    for i in range(1, len(close)):
-        if basic_ub.iloc[i] < final_ub.iloc[i - 1] or close.iloc[i - 1] > final_ub.iloc[i - 1]:
-            final_ub.iloc[i] = basic_ub.iloc[i]
-        else:
-            final_ub.iloc[i] = final_ub.iloc[i - 1]
-        if basic_lb.iloc[i] > final_lb.iloc[i - 1] or close.iloc[i - 1] < final_lb.iloc[i - 1]:
-            final_lb.iloc[i] = basic_lb.iloc[i]
-        else:
-            final_lb.iloc[i] = final_lb.iloc[i - 1]
+    n = len(close)
+    final_ub = np.full(n, np.nan, dtype=float)
+    final_lb = np.full(n, np.nan, dtype=float)
+    st_vals = np.full(n, np.nan, dtype=float)
+    direction = np.full(n, np.nan, dtype=float)
 
-    st = pd.Series(index=close.index, dtype=float)
-    direction = pd.Series(index=close.index, dtype=float)
-    st.iloc[0] = final_ub.iloc[0]
-    direction.iloc[0] = -1.0
-    for i in range(1, len(close)):
-        if st.iloc[i - 1] == final_ub.iloc[i - 1] and close.iloc[i] <= final_ub.iloc[i]:
-            st.iloc[i] = final_ub.iloc[i]
-            direction.iloc[i] = -1.0
-        elif st.iloc[i - 1] == final_ub.iloc[i - 1] and close.iloc[i] > final_ub.iloc[i]:
-            st.iloc[i] = final_lb.iloc[i]
-            direction.iloc[i] = 1.0
-        elif st.iloc[i - 1] == final_lb.iloc[i - 1] and close.iloc[i] >= final_lb.iloc[i]:
-            st.iloc[i] = final_lb.iloc[i]
-            direction.iloc[i] = 1.0
+    # ATR / bands are NaN until ``period`` bars — start there so NaNs do not poison ST.
+    start = period - 1
+    while start < n and (
+        not np.isfinite(basic_ub.iloc[start]) or not np.isfinite(basic_lb.iloc[start])
+    ):
+        start += 1
+    if start >= n:
+        return (
+            pd.Series(st_vals, index=close.index),
+            pd.Series(direction, index=close.index),
+        )
+
+    final_ub[start] = float(basic_ub.iloc[start])
+    final_lb[start] = float(basic_lb.iloc[start])
+    st_vals[start] = final_ub[start]
+    direction[start] = -1.0
+
+    close_a = close.astype(float).to_numpy()
+    bub = basic_ub.to_numpy(dtype=float)
+    blb = basic_lb.to_numpy(dtype=float)
+
+    for i in range(start + 1, n):
+        if bub[i] < final_ub[i - 1] or close_a[i - 1] > final_ub[i - 1]:
+            final_ub[i] = bub[i]
         else:
-            st.iloc[i] = final_ub.iloc[i]
-            direction.iloc[i] = -1.0
-    return st, direction
+            final_ub[i] = final_ub[i - 1]
+        if blb[i] > final_lb[i - 1] or close_a[i - 1] < final_lb[i - 1]:
+            final_lb[i] = blb[i]
+        else:
+            final_lb[i] = final_lb[i - 1]
+
+        if st_vals[i - 1] == final_ub[i - 1] and close_a[i] <= final_ub[i]:
+            st_vals[i] = final_ub[i]
+            direction[i] = -1.0
+        elif st_vals[i - 1] == final_ub[i - 1] and close_a[i] > final_ub[i]:
+            st_vals[i] = final_lb[i]
+            direction[i] = 1.0
+        elif st_vals[i - 1] == final_lb[i - 1] and close_a[i] >= final_lb[i]:
+            st_vals[i] = final_lb[i]
+            direction[i] = 1.0
+        else:
+            st_vals[i] = final_ub[i]
+            direction[i] = -1.0
+
+    return (
+        pd.Series(st_vals, index=close.index),
+        pd.Series(direction, index=close.index),
+    )
 
 
 def find_volume_spikes(

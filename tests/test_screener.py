@@ -21,6 +21,7 @@ from nse_alert.screener.indicators import (
     find_volume_spikes,
     ema,
 )
+import numpy as np
 
 
 def _synth_uptrend(n: int = 260, start: float = 100.0) -> pd.DataFrame:
@@ -129,7 +130,12 @@ def test_market_closed_gate() -> None:
     assert market_closed_enough(after_hhmm=1540, now=evening)
 
 
-def test_ema_monotonic_helper() -> None:
+def test_supertrend_not_all_nan() -> None:
+    df = _synth_uptrend(260)
+    en = enrich_ohlcv(df)
+    assert en["supertrend"].notna().sum() > 200
+    assert np.isfinite(float(en["supertrend"].iloc[-1]))
+    assert float(en["st_dir"].iloc[-1]) in (-1.0, 1.0)
     s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
     out = ema(s, 3)
     assert len(out) == 5
