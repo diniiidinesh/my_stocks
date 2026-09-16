@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # Trading — test defaults: BUY only on +13%, SL 2% below entry
     trade_mode: str = Field(default="off", alias="TRADE_MODE")
     trade_qty: int = Field(default=1, alias="TRADE_QTY")
+    # margin = size so MIS margin ≈ TRADE_MARGIN_INR; fixed = use TRADE_QTY
+    trade_sizing: str = Field(default="margin", alias="TRADE_SIZING")
+    trade_margin_inr: float = Field(default=10_000.0, alias="TRADE_MARGIN_INR")
+    # Used only when margins API unavailable (dry_run / offline)
+    trade_fallback_leverage: float = Field(default=5.0, alias="TRADE_FALLBACK_LEVERAGE")
     trade_product: str = Field(default="MIS", alias="TRADE_PRODUCT")
     trade_order_type: str = Field(default="MARKET", alias="TRADE_ORDER_TYPE")
     trade_market_protection: int = Field(default=2, alias="TRADE_MARKET_PROTECTION")

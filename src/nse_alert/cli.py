@@ -183,6 +183,7 @@ def watch_cmd(
             direction=alert.direction,
             threshold_pct=alert.threshold_pct,
             change_pct=alert.change_pct,
+            entry_ltp=alert.ltp,
         )
         mode = executor.mode
         if mode == "confirm":
@@ -201,7 +202,7 @@ def watch_cmd(
                 f"{req.side} {req.quantity}x {req.symbol} ({req.product} {req.order_type})\n"
                 f"Entry≈`{alert.ltp:.2f}` → SL-Limit trigger≈`{stop_px:.2f}` "
                 f"limit≈`{limit_px:.2f}` (-{settings.trade_stop_loss_pct:g}%)\n"
-                f"Reason: {req.reason}\n\n"
+                f"Sizing: {req.reason}\n\n"
                 f"Reply: `CONFIRM {pending.id}` or `CANCEL {pending.id}`\n"
                 f"Or: `uv run nse-alert confirm {pending.id}`"
             )
@@ -331,6 +332,9 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
         stop_wait_sec=settings.trade_stop_wait_sec,
         trail_breakeven=settings.trade_trail_breakeven,
         trail_breakeven_pct=settings.trade_trail_breakeven_pct,
+        sizing_mode=settings.trade_sizing,
+        margin_budget_inr=settings.trade_margin_inr,
+        fallback_leverage=settings.trade_fallback_leverage,
         book=book,
     )
 

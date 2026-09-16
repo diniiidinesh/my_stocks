@@ -20,6 +20,7 @@ def _executor(tmp_path: Path, **kwargs: Any) -> OrderExecutor:
     defaults: dict[str, Any] = {
         "mode": "dry_run",
         "default_qty": 1,
+        "sizing_mode": "fixed",
         "max_orders_per_day": 10,
         "trade_on_thresholds": [13],
         "trade_sides": "up",
@@ -421,6 +422,49 @@ def test_tc_trail_breakeven_dry_run(tmp_path: Path) -> None:
     assert msg is not None and "cost" in msg.lower()
     pos = ex.book.get_position("SBIN") if ex.book else None
     assert pos is not None and pos["breakeven_armed"] is True
+
+
+def test_tc_margin_sizing_uses_order_margins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _MarginKite(_FakeKite):
+        def order_margins(self, params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # ₹2,000 margin per share → ₹10k budget ⇒ 5 shares
+            return [{"total": 2000.0, "leverage": 5.0}]
+
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        sizing_mode="margin",
+        margin_budget_inr=10_000,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: _MarginKite())
+    req = ex.build_request_from_alert(
+        symbol="INFY",
+        direction="UP",
+        threshold_pct=13.0,
+        change_pct=13.5,
+        entry_ltp=1500.0,
+    )
+    assert req.quantity == 5
+    assert "margin≈₹10000" in req.reason
+    assert "5 shares" in req.reason
+
+
+def test_tc_margin_sizing_fallback_leverage(tmp_path: Path) -> None:
+    ex = _executor(
+        tmp_path,
+        sizing_mode="margin",
+        margin_budget_inr=10_000,
+        fallback_leverage=5.0,
+        # no api credentials → margins call fails → fallback
+    )
+    qty, note = ex.size_quantity(symbol="AAA", price=500.0, side="BUY")
+    # 10000 * 5 / 500 = 100
+    assert qty == 100
+    assert "fallback" in note.lower()
 
 
 def test_tc_alert_dataclass_still_compatible_with_trade_fields() -> None:
