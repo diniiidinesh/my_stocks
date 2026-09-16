@@ -39,6 +39,9 @@ def write_screener_excel(result: ScreenResult, path: Path) -> Path:
         "vol_spike_best_mult",
         "vol_spike_days",
         "vol_spike_detail",
+        "deliv_pct_max_on_spikes",
+        "deliv_spike_days",
+        "deliv_spike_detail",
         "as_of",
         "all_pass",
         "mandatory_pass",
@@ -49,6 +52,7 @@ def write_screener_excel(result: ScreenResult, path: Path) -> Path:
         "pass_rsi",
         "pass_macd",
         "pass_near_52w",
+        "pass_delivery",
     ]
     cols = [c for c in preferred if c in df.columns] + [
         c for c in df.columns if c not in preferred
@@ -93,10 +97,15 @@ def format_screener_summary(result: ScreenResult, *, excel_name: str = "") -> st
         lines.append("Top all-pass (already ranked):")
         for r in tops:
             spike = f" spikes={r.vol_spike_days}" if r.vol_spike_days else ""
+            deliv = (
+                f" delivMax={r.deliv_pct_max_on_spikes:.0f}%"
+                if pd.notna(r.deliv_pct_max_on_spikes)
+                else ""
+            )
             lines.append(
                 f"• {r.symbol} close={r.close:.2f} "
                 f"ADX={r.adx:.1f} RSI={r.rsi:.1f} "
-                f"from52w={r.pct_from_52w_high:.1f}%{spike}"
+                f"from52w={r.pct_from_52w_high:.1f}%{spike}{deliv}"
             )
     else:
         lines.append("No names passed every enabled filter today.")
@@ -144,6 +153,8 @@ def config_from_settings(settings: object) -> ScreenConfig:
         require_rsi=bool(g("screen_require_rsi")),
         require_macd=bool(g("screen_require_macd")),
         require_near_52w=bool(g("screen_require_near_52w")),
+        require_delivery=bool(g("screen_require_delivery")),
+        min_delivery_pct=float(g("screen_min_delivery_pct")),
         history_days=int(g("screen_history_days")),
         after_hhmm=int(g("screen_after_hhmm")),
         max_symbols=int(g("screen_max_symbols")),

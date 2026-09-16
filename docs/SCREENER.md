@@ -22,8 +22,11 @@ Daily-chart screener, **separate** from intraday ±% alerts and MIS orders.
 | RSI(14) between 40–60 | on | Optional |
 | MACD line > 0 | on | Optional |
 | Within X% of 52-week high | 5% | Optional |
+| Delivery ≥ Y% on a volume-spike day | 40% | Optional (`SCREEN_REQUIRE_DELIVERY`) |
 
 Volume spikes list **every** hit in the lookback window as `T-0` (latest bar), `T-1`, … with the multiple and absolute volume vs EMA.
+
+Delivery uses NSE full bhavcopy (`DELIV_PER`). **Pass if any spike day** with known delivery is ≥ `SCREEN_MIN_DELIVERY_PCT`. Days with missing delivery are **ignored**. Excel columns: `deliv_pct_max_on_spikes`, `deliv_spike_days`, `deliv_spike_detail`, `pass_delivery`.
 
 ## Ranking (Excel)
 
@@ -63,7 +66,8 @@ Refresh the Kite access token on trading days if you prefer Kite history (`SCREE
 
 All `SCREEN_*` keys are in [../.env.example](../.env.example). Toggle optional filters with
 `SCREEN_REQUIRE_VOLUME`, `SCREEN_REQUIRE_ADX`, `SCREEN_REQUIRE_RSI`,
-`SCREEN_REQUIRE_MACD`, `SCREEN_REQUIRE_NEAR_52W`.
+`SCREEN_REQUIRE_MACD`, `SCREEN_REQUIRE_NEAR_52W`, `SCREEN_REQUIRE_DELIVERY`
+(`SCREEN_MIN_DELIVERY_PCT`).
 
 Optional market-cap override CSV: `SCREEN_MARKET_CAP_FILE` with columns
 `symbol,market_cap_cr`.

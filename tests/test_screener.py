@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pytest
 
+from nse_alert.screener.delivery import DeliveryBook, DeliveryInfo, _normalize_bhav_df
 from nse_alert.screener.engine import (
     ScreenConfig,
     evaluate_symbol,
@@ -21,7 +21,6 @@ from nse_alert.screener.indicators import (
     find_volume_spikes,
     ema,
 )
-import numpy as np
 
 
 def _synth_uptrend(n: int = 260, start: float = 100.0) -> pd.DataFrame:
@@ -140,3 +139,79 @@ def test_supertrend_not_all_nan() -> None:
     out = ema(s, 3)
     assert len(out) == 5
     assert out.iloc[-1] > out.iloc[0]
+
+
+class _FakeDeliveryBook:
+    def __init__(self, mapping: dict[tuple[str, date], DeliveryInfo]) -> None:
+        self.mapping = mapping
+
+    def get(self, symbol: str, session_day: date) -> DeliveryInfo | None:
+        return self.mapping.get((symbol.upper(), session_day))
+
+
+def test_delivery_filter_any_spike_ignores_missing() -> None:
+    df = _synth_uptrend()
+    spikes = find_volume_spikes(
+        enrich_ohlcv(df), lookback_days=20, ema_period=20, multiple=1.5
+    )
+    assert spikes
+    spike_day = date.fromisoformat(spikes[0].date)
+    # Only one spike day has delivery; it is above 40% → pass
+    book = _FakeDeliveryBook(
+        {
+            ("DEMO", spike_day): DeliveryInfo(
+                traded_qty=1e6, delivery_qty=5e5, delivery_pct=55.0
+            )
+        }
+    )
+    cfg = ScreenConfig(
+        require_volume=True,
+        require_adx=False,
+        require_rsi=False,
+        require_macd=False,
+        require_near_52w=False,
+        require_delivery=True,
+        min_delivery_pct=40.0,
+        min_price=1.0,
+    )
+    row = evaluate_symbol("DEMO", df, cfg=cfg, delivery_book=book)  # type: ignore[arg-type]
+    assert row is not None
+    assert row.pass_delivery is True
+    assert row.deliv_pct_max_on_spikes == 55.0
+    assert f"T-{spikes[0].days_ago}" in row.deliv_spike_days
+    assert "55.0%" in row.deliv_spike_detail or "55%" in row.deliv_spike_detail
+
+    # Known delivery below threshold → fail (missing other days ignored)
+    book_low = _FakeDeliveryBook(
+        {
+            ("DEMO", spike_day): DeliveryInfo(
+                traded_qty=1e6, delivery_qty=2e5, delivery_pct=20.0
+            )
+        }
+    )
+    row_low = evaluate_symbol("DEMO", df, cfg=cfg, delivery_book=book_low)  # type: ignore[arg-type]
+    assert row_low is not None
+    assert row_low.pass_delivery is False
+    assert row_low.deliv_spike_days == ""
+
+    # All missing → fail optional delivery (no known qualifying day)
+    row_miss = evaluate_symbol("DEMO", df, cfg=cfg, delivery_book=_FakeDeliveryBook({}))  # type: ignore[arg-type]
+    assert row_miss is not None
+    assert row_miss.pass_delivery is False
+    assert "n/a" in row_miss.deliv_spike_detail
+
+
+def test_normalize_bhav_df_parses_delivery_columns() -> None:
+    raw = pd.DataFrame(
+        {
+            "SYMBOL": ["AAA", "BBB"],
+            "SERIES": ["EQ", "EQ"],
+            "TTL_TRD_QNTY": [1000, 2000],
+            "DELIV_QTY": [500, 100],
+            "DELIV_PER": ["50.00", "5"],
+        }
+    )
+    out = _normalize_bhav_df(raw)
+    assert list(out["symbol"]) == ["AAA", "BBB"]
+    assert "delivery_pct" in out.columns
+

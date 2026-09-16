@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     screen_require_rsi: bool = Field(default=True, alias="SCREEN_REQUIRE_RSI")
     screen_require_macd: bool = Field(default=True, alias="SCREEN_REQUIRE_MACD")
     screen_require_near_52w: bool = Field(default=True, alias="SCREEN_REQUIRE_NEAR_52W")
+    # Delivery % on volume-spike days (NSE bhavcopy); pass if any spike day ≥ threshold
+    screen_require_delivery: bool = Field(default=True, alias="SCREEN_REQUIRE_DELIVERY")
+    screen_min_delivery_pct: float = Field(default=40.0, alias="SCREEN_MIN_DELIVERY_PCT")
     screen_history_days: int = Field(default=400, alias="SCREEN_HISTORY_DAYS")
     screen_after_hhmm: int = Field(default=1540, alias="SCREEN_AFTER_HHMM")
     screen_max_symbols: int = Field(default=0, alias="SCREEN_MAX_SYMBOLS")

@@ -11,6 +11,7 @@ import pandas as pd
 
 from nse_alert.screener.history import get_daily_history
 from nse_alert.screener.indicators import enrich_ohlcv, find_volume_spikes
+from nse_alert.screener.delivery import DeliveryBook, parse_iso_date
 from nse_alert.screener.market_cap import (
     fetch_market_caps_yfinance,
     load_index_symbols,
@@ -49,6 +50,8 @@ class ScreenConfig:
     require_rsi: bool = True
     require_macd: bool = True
     require_near_52w: bool = True
+    require_delivery: bool = True
+    min_delivery_pct: float = 40.0
     history_days: int = 400
     after_hhmm: int = 1540
     max_symbols: int = 0
@@ -82,6 +85,7 @@ class ScreenRow:
     pass_rsi: bool
     pass_macd: bool
     pass_near_52w: bool
+    pass_delivery: bool
     mandatory_pass: bool
     optional_score: int
     optional_total: int
@@ -90,6 +94,9 @@ class ScreenRow:
     vol_spike_best_mult: float
     vol_spike_days: str
     vol_spike_detail: str
+    deliv_pct_max_on_spikes: float
+    deliv_spike_days: str
+    deliv_spike_detail: str
     as_of: str
 
 
@@ -187,6 +194,7 @@ def evaluate_symbol(
     name: str = "",
     market_cap_cr: float = 0.0,
     turnover_cr: float = 0.0,
+    delivery_book: DeliveryBook | None = None,
 ) -> ScreenRow | None:
     if df is None or len(df) < max(cfg.ema_slow, 60) + 5:
         return None
@@ -228,12 +236,41 @@ def evaluate_symbol(
     )
     best_mult = max((s.multiple for s in spikes), default=0.0)
 
+    # Delivery % on spike days (missing days ignored)
+    deliv_known: list[tuple[int, str, float]] = []
+    deliv_parts: list[str] = []
+    for s in spikes:
+        day = parse_iso_date(s.date)
+        info = delivery_book.get(symbol, day) if delivery_book and day else None
+        if info is None:
+            deliv_parts.append(f"T-{s.days_ago}:n/a")
+            continue
+        deliv_known.append((s.days_ago, s.date, info.delivery_pct))
+        deliv_parts.append(f"T-{s.days_ago}:{info.delivery_pct:.1f}%")
+    deliv_pct_max = max((p for _, _, p in deliv_known), default=float("nan"))
+    qualifying = [
+        (dago, dt, pct)
+        for dago, dt, pct in deliv_known
+        if pct >= cfg.min_delivery_pct
+    ]
+    # Pass if ANY spike day with known delivery meets the threshold.
+    # Days with missing data are ignored (neither pass nor fail on their own).
+    pass_delivery = len(qualifying) > 0
+    deliv_spike_days = (
+        ", ".join(f"T-{dago}" for dago, _, _ in qualifying) if qualifying else ""
+    )
+    deliv_spike_detail = "; ".join(deliv_parts) if deliv_parts else ""
+
     ema_f = float(last["ema_fast"])
     ema_m = float(last["ema_mid"])
     ema_s = float(last["ema_slow"])
     pass_ema = ema_f > ema_m > ema_s
     st = float(last["supertrend"])
-    pass_st = close > st and float(last["st_dir"]) > 0
+    pass_st = (
+        pd.notna(st)
+        and float(last["st_dir"]) > 0
+        and close > st
+    )
     adx_v = float(last["adx"]) if pd.notna(last["adx"]) else float("nan")
     pass_adx = bool(pd.notna(adx_v) and adx_v > cfg.adx_min)
     rsi_v = float(last["rsi"]) if pd.notna(last["rsi"]) else float("nan")
@@ -258,6 +295,7 @@ def evaluate_symbol(
         (cfg.require_rsi, pass_rsi),
         (cfg.require_macd, pass_macd),
         (cfg.require_near_52w, pass_near),
+        (cfg.require_delivery, pass_delivery),
     ]
     enabled = [(need, ok) for need, ok in optional_flags if need]
     optional_total = len(enabled)
@@ -279,7 +317,7 @@ def evaluate_symbol(
         ema_fast=round(ema_f, 2),
         ema_mid=round(ema_m, 2),
         ema_slow=round(ema_s, 2),
-        supertrend=round(st, 2),
+        supertrend=round(st, 2) if pd.notna(st) else float("nan"),
         adx=round(adx_v, 2) if pd.notna(adx_v) else float("nan"),
         rsi=round(rsi_v, 2) if pd.notna(rsi_v) else float("nan"),
         macd=round(macd_v, 4) if pd.notna(macd_v) else float("nan"),
@@ -294,6 +332,7 @@ def evaluate_symbol(
         pass_rsi=pass_rsi,
         pass_macd=pass_macd,
         pass_near_52w=pass_near,
+        pass_delivery=pass_delivery,
         mandatory_pass=mandatory,
         optional_score=optional_score,
         optional_total=optional_total,
@@ -302,6 +341,11 @@ def evaluate_symbol(
         vol_spike_best_mult=best_mult,
         vol_spike_days=spike_days,
         vol_spike_detail=spike_detail,
+        deliv_pct_max_on_spikes=(
+            round(deliv_pct_max, 2) if pd.notna(deliv_pct_max) else float("nan")
+        ),
+        deliv_spike_days=deliv_spike_days,
+        deliv_spike_detail=deliv_spike_detail,
         as_of=as_of_str,
     )
 
@@ -393,6 +437,14 @@ def run_screener(
             _, tovr = _turnover_from_quotes(quote_map, sym)
             turnovers[sym] = tovr
 
+    delivery_book = DeliveryBook(state_dir / "screener" / "bhavcopy")
+    try:
+        delivery_book.prefetch_lookback(
+            as_of=date.today(), lookback_days=cfg.lookback_days
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Delivery bhavcopy prefetch failed: %s", exc)
+
     hist_dir = state_dir / "screener" / "history"
     rows: list[ScreenRow] = []
     skipped = 0
@@ -412,6 +464,7 @@ def run_screener(
             name=name_by.get(sym, sym),
             market_cap_cr=mcaps.get(sym, 0.0),
             turnover_cr=turnovers.get(sym, 0.0),
+            delivery_book=delivery_book,
         )
         if row is None:
             skipped += 1
