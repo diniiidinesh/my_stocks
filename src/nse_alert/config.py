@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     trade_product: str = Field(default="CNC", alias="TRADE_PRODUCT")
     trade_order_type: str = Field(default="MARKET", alias="TRADE_ORDER_TYPE")
     trade_market_protection: int = Field(default=2, alias="TRADE_MARKET_PROTECTION")
-    trade_max_orders_per_day: int = Field(default=3, alias="TRADE_MAX_ORDERS_PER_DAY")
+    trade_max_orders_per_day: int = Field(default=10, alias="TRADE_MAX_ORDERS_PER_DAY")
     # Only place when this alert level is crossed (test: 13)
     trade_on_thresholds: str = Field(default="13", alias="TRADE_ON_THRESHOLDS")
     # up = BUY on UP alerts only
