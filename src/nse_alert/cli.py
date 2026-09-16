@@ -578,6 +578,96 @@ def set_token_cmd(access_token: str) -> None:
     click.echo("Saved KITE_ACCESS_TOKEN and set FEED_MODE=kite")
 
 
+@main.command("screen")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Run even before SCREEN_AFTER_HHMM (default 15:40 IST)",
+)
+@click.option(
+    "--telegram/--no-telegram",
+    default=True,
+    help="Send summary + Excel to Telegram when configured",
+)
+@click.option(
+    "--max-symbols",
+    type=int,
+    default=None,
+    help="Limit symbols (for smoke tests); default from SCREEN_MAX_SYMBOLS",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Excel output path (default under STATE_DIR/screener/)",
+)
+def screen_cmd(
+    force: bool,
+    telegram: bool,
+    max_symbols: int | None,
+    out_path: Path | None,
+) -> None:
+    """EOD TA screener (daily chart): Excel + Telegram summary after 15:40 IST.
+
+    Separate from intraday ±% alerts / MIS orders. Mandatory: price > SuperTrend
+    and EMA20 > EMA50 > EMA200. Optional filters (volume spike, ADX, RSI, MACD,
+    near 52w high) are configurable. Rows are ranked with all-pass names first.
+    """
+    from nse_alert.screener.engine import market_closed_enough, run_screener
+    from nse_alert.screener.export import (
+        config_from_settings,
+        format_screener_summary,
+        write_screener_excel,
+    )
+    from nse_alert.universe import load_custom_universe
+
+    settings = Settings()
+    cfg = config_from_settings(settings)
+    if max_symbols is not None:
+        cfg.max_symbols = max_symbols
+
+    if not force and not market_closed_enough(after_hhmm=cfg.after_hhmm):
+        raise click.ClickException(
+            f"Screener is meant to run after {cfg.after_hhmm:04d} IST "
+            f"(set SCREEN_AFTER_HHMM or pass --force)."
+        )
+
+    kite = None
+    if settings.kite_api_key and settings.kite_access_token:
+        kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+    else:
+        logger.warning(
+            "No Kite token — using Yahoo history/market-cap only; "
+            "turnover filter may be skipped"
+        )
+
+    custom = None
+    if settings.screen_custom_universe_file:
+        custom = load_custom_universe(settings.screen_custom_universe_file)
+
+    result = run_screener(
+        cfg,
+        state_dir=settings.state_dir,
+        kite=kite,
+        custom_symbols=custom,
+    )
+    excel = out_path or (
+        settings.state_dir / "screener" / f"screen-{result.as_of.isoformat()}.xlsx"
+    )
+    write_screener_excel(result, excel)
+    summary = format_screener_summary(result, excel_name=excel.name)
+    click.echo(summary)
+    click.echo(f"\nSaved: {excel}")
+
+    if telegram and settings.telegram_configured:
+        tg = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+        tg.send_text(summary)
+        tg.send_document(excel, caption=f"EOD screener {result.as_of.isoformat()}")
+    elif telegram:
+        logger.warning("Telegram not configured — Excel saved locally only")
+
+
 @main.command("login-hint")
 def login_hint() -> None:
     """Deprecated: use `nse-alert login` instead."""

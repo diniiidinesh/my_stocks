@@ -18,6 +18,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/ALERTS.md](docs/ALERTS.md)** | Thresholds, F&O filter, ASM tags, EOD reports |
 | **[docs/LOGIN.md](docs/LOGIN.md)** | Daily Kite token (`login` / `set-token`) |
 | **[docs/ORDERS.md](docs/ORDERS.md)** | Dry-run / confirm / auto trading |
+| **[docs/SCREENER.md](docs/SCREENER.md)** | EOD TA screener → Excel + Telegram |
 | **[docs/TESTING_ORDERS.md](docs/TESTING_ORDERS.md)** | Order test cases + live handoff checklist |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Code layout and data flow |
 | **[docs/UPKEEP.md](docs/UPKEEP.md)** | How to keep docs accurate when code changes |
@@ -55,6 +56,7 @@ nse-alert set-token ACCESS_TOKEN  # write token into .env
 nse-alert watch [--threshold 4,7,11,13] [--feed mock|kite] [--max-ticks N]
 nse-alert universe [--min-turnover-cr 25] [--min-price 20]
 nse-alert report [--date YYYY-MM-DD] [--telegram]
+nse-alert screen [--force] [--telegram/--no-telegram] [--max-symbols N]
 nse-alert order buy|sell SYMBOL [--qty N] [--dry-run|--live]
 nse-alert pending
 nse-alert confirm ID

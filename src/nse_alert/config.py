@@ -58,6 +58,44 @@ class Settings(BaseSettings):
     trade_trail_breakeven_pct: float = Field(default=2.0, alias="TRADE_TRAIL_BREAKEVEN_PCT")
     trade_confirm_ttl_minutes: int = Field(default=30, alias="TRADE_CONFIRM_TTL_MINUTES")
 
+    # --- EOD TA screener (separate from intraday alerts / orders) ---
+    screen_min_market_cap_cr: float = Field(default=5000.0, alias="SCREEN_MIN_MARKET_CAP_CR")
+    screen_min_turnover_cr: float = Field(default=10.0, alias="SCREEN_MIN_TURNOVER_CR")
+    screen_min_price: float = Field(default=20.0, alias="SCREEN_MIN_PRICE")
+    screen_lookback_days: int = Field(default=20, alias="SCREEN_LOOKBACK_DAYS")
+    screen_volume_ema_period: int = Field(default=20, alias="SCREEN_VOLUME_EMA_PERIOD")
+    screen_volume_mult: float = Field(default=1.5, alias="SCREEN_VOLUME_MULT")
+    screen_supertrend_period: int = Field(default=10, alias="SCREEN_SUPERTREND_PERIOD")
+    screen_supertrend_mult: float = Field(default=3.0, alias="SCREEN_SUPERTREND_MULT")
+    screen_ema_fast: int = Field(default=20, alias="SCREEN_EMA_FAST")
+    screen_ema_mid: int = Field(default=50, alias="SCREEN_EMA_MID")
+    screen_ema_slow: int = Field(default=200, alias="SCREEN_EMA_SLOW")
+    screen_adx_period: int = Field(default=14, alias="SCREEN_ADX_PERIOD")
+    screen_adx_min: float = Field(default=25.0, alias="SCREEN_ADX_MIN")
+    screen_rsi_period: int = Field(default=14, alias="SCREEN_RSI_PERIOD")
+    screen_rsi_min: float = Field(default=40.0, alias="SCREEN_RSI_MIN")
+    screen_rsi_max: float = Field(default=60.0, alias="SCREEN_RSI_MAX")
+    screen_macd_fast: int = Field(default=12, alias="SCREEN_MACD_FAST")
+    screen_macd_slow: int = Field(default=26, alias="SCREEN_MACD_SLOW")
+    screen_macd_signal: int = Field(default=9, alias="SCREEN_MACD_SIGNAL")
+    screen_near_52w_high_pct: float = Field(default=5.0, alias="SCREEN_NEAR_52W_HIGH_PCT")
+    screen_require_volume: bool = Field(default=True, alias="SCREEN_REQUIRE_VOLUME")
+    screen_require_adx: bool = Field(default=True, alias="SCREEN_REQUIRE_ADX")
+    screen_require_rsi: bool = Field(default=True, alias="SCREEN_REQUIRE_RSI")
+    screen_require_macd: bool = Field(default=True, alias="SCREEN_REQUIRE_MACD")
+    screen_require_near_52w: bool = Field(default=True, alias="SCREEN_REQUIRE_NEAR_52W")
+    screen_history_days: int = Field(default=400, alias="SCREEN_HISTORY_DAYS")
+    screen_after_hhmm: int = Field(default=1540, alias="SCREEN_AFTER_HHMM")
+    screen_max_symbols: int = Field(default=0, alias="SCREEN_MAX_SYMBOLS")
+    screen_prefer_kite_history: bool = Field(
+        default=True, alias="SCREEN_PREFER_KITE_HISTORY"
+    )
+    screen_market_cap_file: str = Field(default="", alias="SCREEN_MARKET_CAP_FILE")
+    # Optional symbol list for the screener only (does NOT reuse CUSTOM_UNIVERSE_FILE)
+    screen_custom_universe_file: str = Field(
+        default="", alias="SCREEN_CUSTOM_UNIVERSE_FILE"
+    )
+
     @property
     def thresholds(self) -> list[float]:
         return parse_thresholds(self.threshold_pct)

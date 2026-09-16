@@ -174,6 +174,24 @@ docker compose run --rm nse-alert nse-alert confirm ABC123
 # or reply in Telegram: CONFIRM ABC123
 ```
 
+## EOD TA screener (Excel + Telegram)
+
+Separate from the intraday watcher. After market close (≥ 15:40 IST):
+
+```bash
+cd /opt/nse-alert
+uv run nse-alert screen
+# smoke: uv run nse-alert screen --force --max-symbols 30 --no-telegram
+```
+
+Cron example (weekdays 16:15 IST — adjust TZ on the box):
+
+```cron
+15 16 * * 1-5  cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1
+```
+
+See [docs/SCREENER.md](../docs/SCREENER.md) for filters and ranking.
+
 ## SEBI / Zerodha reminders
 
 - Static IP whitelist required for **order** endpoints from **1 Apr 2026**.
