@@ -12,7 +12,7 @@ All indicators use the **daily** chart only (Kite `"day"` / Yahoo `1d`).
    **market cap ≥ `SCREEN_MIN_MARKET_CAP_CR`** (default ₹5000 Cr) and
    **turnover ≥ `SCREEN_MIN_TURNOVER_CR`** (default ₹10 Cr via Kite quotes).
 2. Pulls **daily OHLCV** (Kite historical when logged in, else Yahoo) and caches under
-   `STATE_DIR/screener/history/`.
+   `STATE_DIR/screener/history/`. The cache is reused only when its last bar is on or after the latest completed NSE session (weekday after `SCREEN_AFTER_HHMM` / 15:40 IST); Friday’s bars stay valid through the weekend so Saturday does not refetch.
 3. Loads NSE **full bhavcopy** for delivery % on volume-spike days
    (`STATE_DIR/screener/bhavcopy/`).
 4. Scores each name and writes an Excel workbook + Telegram summary **after 15:40 IST**.

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from nse_alert.screener.history import get_daily_history
+from nse_alert.screener.history import get_daily_history, latest_completed_nse_session
 from nse_alert.screener.indicators import enrich_ohlcv, find_volume_spikes
 from nse_alert.screener.delivery import DeliveryBook, parse_iso_date
 from nse_alert.screener.market_cap import (
@@ -456,6 +456,7 @@ def run_screener(
             kite=kite,
             instrument_token=token_by.get(sym),
             prefer_kite=cfg.prefer_kite_history,
+            after_hhmm=cfg.after_hhmm,
         )
         row = evaluate_symbol(
             sym,
@@ -476,12 +477,7 @@ def run_screener(
     # Keep mandatory-pass names in the main ranking list; still include others below.
     ranked = _sort_rows(rows)
     frame = rows_to_frame(ranked)
-    as_of = date.today()
-    if ranked:
-        try:
-            as_of = date.fromisoformat(ranked[0].as_of)
-        except ValueError:
-            pass
+    as_of = latest_completed_nse_session(after_hhmm=cfg.after_hhmm)
     return ScreenResult(
         as_of=as_of,
         rows=ranked,

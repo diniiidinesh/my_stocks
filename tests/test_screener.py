@@ -215,3 +215,100 @@ def test_normalize_bhav_df_parses_delivery_columns() -> None:
     assert list(out["symbol"]) == ["AAA", "BBB"]
     assert "delivery_pct" in out.columns
 
+
+def test_history_cache_fresh_weekend_stale_weekday_after_close() -> None:
+    """Friday cache must not skip Monday's completed session (old <=3 day gap)."""
+    from nse_alert.screener.history import (
+        history_cache_is_fresh,
+        latest_completed_nse_session,
+    )
+
+    ist = ZoneInfo("Asia/Kolkata")
+    friday = date(2026, 9, 11)
+    # 17 Sep 2026 is Thursday; use that evening as "today after close"
+    thu_evening = datetime(2026, 9, 17, 16, 15, tzinfo=ist)
+    wed = date(2026, 9, 16)
+    assert latest_completed_nse_session(now=thu_evening) == date(2026, 9, 17)
+    assert history_cache_is_fresh(wed, now=thu_evening, bar_count=250, min_bars=220) is False
+
+    sat = datetime(2026, 9, 12, 10, 0, tzinfo=ist)
+    sun = datetime(2026, 9, 13, 18, 0, tzinfo=ist)
+    assert latest_completed_nse_session(now=sat) == friday
+    assert latest_completed_nse_session(now=sun) == friday
+    assert history_cache_is_fresh(friday, now=sat, bar_count=250, min_bars=220) is True
+    assert history_cache_is_fresh(friday, now=sun, bar_count=250, min_bars=220) is True
+
+    mon_morning = datetime(2026, 9, 14, 10, 0, tzinfo=ist)
+    mon_evening = datetime(2026, 9, 14, 16, 0, tzinfo=ist)
+    assert latest_completed_nse_session(now=mon_morning) == friday
+    assert history_cache_is_fresh(friday, now=mon_morning, bar_count=250, min_bars=220) is True
+    assert latest_completed_nse_session(now=mon_evening) == date(2026, 9, 14)
+    assert history_cache_is_fresh(friday, now=mon_evening, bar_count=250, min_bars=220) is False
+    assert history_cache_is_fresh(
+        date(2026, 9, 14), now=mon_evening, bar_count=250, min_bars=220
+    ) is True
+
+
+def test_get_daily_history_refetches_when_session_newer(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    from nse_alert.screener import history as hist
+
+    ist = ZoneInfo("Asia/Kolkata")
+    cache_dir = tmp_path / "history"
+    cache_dir.mkdir()
+    last = date(2026, 9, 16)
+    idx = pd.bdate_range(end=pd.Timestamp(last), periods=8)
+    cached = pd.DataFrame(
+        {
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 1_000.0,
+        },
+        index=idx,
+    )
+    hist.save_cached_history(cache_dir / "AAA.csv", cached)
+
+    fetched: list[str] = []
+
+    def fake_yahoo(symbol: str, *, days: int = 400) -> pd.DataFrame:
+        fetched.append(symbol)
+        idx2 = pd.bdate_range(end=pd.Timestamp("2026-09-17"), periods=8)
+        return pd.DataFrame(
+            {
+                "open": 10.0,
+                "high": 11.0,
+                "low": 9.0,
+                "close": 10.5,
+                "volume": 1_000.0,
+            },
+            index=idx2,
+        )
+
+    monkeypatch.setattr(hist, "fetch_history_yfinance", fake_yahoo)
+    evening = datetime(2026, 9, 17, 16, 15, tzinfo=ist)
+    out = hist.get_daily_history(
+        "AAA",
+        cache_dir=cache_dir,
+        days=10,
+        prefer_kite=False,
+        sleep_sec=0.0,
+        now=evening,
+    )
+    assert fetched == ["AAA"]
+    assert out.index.max().date() == date(2026, 9, 17)
+
+    fetched.clear()
+    again = hist.get_daily_history(
+        "AAA",
+        cache_dir=cache_dir,
+        days=10,
+        prefer_kite=False,
+        sleep_sec=0.0,
+        now=evening,
+    )
+    assert fetched == []
+    assert again.index.max().date() == date(2026, 9, 17)
+

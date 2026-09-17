@@ -5,10 +5,59 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def latest_completed_nse_session(
+    *,
+    now: datetime | None = None,
+    after_hhmm: int = 1540,
+) -> date:
+    """Latest weekday that should already have an NSE daily bar.
+
+    After ``after_hhmm`` IST (default 15:40) on Mon–Fri → that calendar day.
+    Before the cutoff, or on Sat/Sun → previous weekday. There is no holiday
+    calendar; a closed Wednesday still looks like a session (one extra fetch
+    that returns no new bar).
+    """
+    current = now or datetime.now(IST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=IST)
+    else:
+        current = current.astimezone(IST)
+    day = current.date()
+    hhmm = current.hour * 100 + current.minute
+    if hhmm < after_hhmm:
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:  # Saturday=5, Sunday=6
+        day -= timedelta(days=1)
+    return day
+
+
+def history_cache_is_fresh(
+    last_bar: date,
+    *,
+    now: datetime | None = None,
+    after_hhmm: int = 1540,
+    bar_count: int = 0,
+    min_bars: int = 0,
+) -> bool:
+    """True when cache already includes the latest completed session.
+
+    Weekend: Friday's bar stays fresh through Saturday/Sunday. Weekday after
+    the EOD cutoff: Friday's bar is stale on Monday 15:40+ (the old
+    ``(today - last).days <= 3`` skip treated that as fresh).
+    """
+    if min_bars and bar_count < min_bars:
+        return False
+    session = latest_completed_nse_session(now=now, after_hhmm=after_hhmm)
+    return last_bar >= session
 
 
 def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
@@ -116,15 +165,22 @@ def get_daily_history(
     instrument_token: int | None = None,
     prefer_kite: bool = True,
     sleep_sec: float = 0.35,
+    after_hhmm: int = 1540,
+    now: datetime | None = None,
 ) -> pd.DataFrame:
     """Load daily OHLCV with on-disk cache; refresh from Kite or Yahoo."""
     path = cache_dir / f"{symbol.upper()}.csv"
     cached = load_cached_history(path)
-    today = date.today()
     if cached is not None and not cached.empty:
         last = cached.index.max().date()
-        # Cache is fresh enough after the latest session (allow weekend gap).
-        if (today - last).days <= 3 and len(cached) >= min(220, days // 2):
+        min_len = min(220, days // 2)
+        if history_cache_is_fresh(
+            last,
+            now=now,
+            after_hhmm=after_hhmm,
+            bar_count=len(cached),
+            min_bars=min_len,
+        ):
             return cached.tail(days)
 
     df = pd.DataFrame()
