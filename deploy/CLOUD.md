@@ -271,7 +271,34 @@ See [docs/SCREENER.md](../docs/SCREENER.md) for filters, delivery %, and ranking
 - Market orders need non-zero **market protection** (`TRADE_MARKET_PROTECTION`).
 - This is not investment advice; start with `dry_run`, `TRADE_MARGIN_INR` you can afford (or `TRADE_SIZING=fixed` + tiny `TRADE_QTY`), and `confirm`.
 
-## Alternative: systemd (no Docker)
+## Deployment mechanism: Docker only — do not also run systemd
+
+**Docker Compose is the one production path for the long-running watcher.**
+`deploy/nse-alert.service` (systemd) is kept only as a reference for
+non-Docker hosts and **must never run at the same time as the Docker
+container** — both hold a long-poll on the same Telegram bot token, and
+Telegram allows exactly one `getUpdates` consumer per token. A second
+poller doesn't crash; it silently 409s forever, which killed order
+confirmation for hours on 2026-09-17 with no alert. See
+[../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md) (Incident A).
+
+Before enabling one path, make sure the other is off:
+
+```bash
+# Using Docker (the documented default):
+sudo systemctl disable --now nse-alert 2>/dev/null || true
+
+# Using systemd instead of Docker:
+cd /opt/nse-alert && docker compose down
+```
+
+**Verify exactly one watcher is running, always:**
+
+```bash
+pgrep -fa "nse-alert watch"   # must print exactly one line
+```
+
+If you do need the systemd path (no Docker on the host):
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -280,3 +307,8 @@ sudo cp deploy/nse-alert.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now nse-alert
 ```
+
+Also note: the watcher does not reload `.env` on change. After editing
+`TRADE_MODE` or any other setting, restart whichever watcher is running
+(`docker compose restart nse-alert` or `sudo systemctl restart nse-alert`) —
+otherwise the process keeps running on stale config indefinitely.

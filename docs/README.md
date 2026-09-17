@@ -18,6 +18,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | See where code lives | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Change code safely | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Update docs after a code change | [UPKEEP.md](UPKEEP.md) |
+| Understand the 2026-09-17 outages + prevention | [RCA-2026-09-17.md](RCA-2026-09-17.md) |
 
 ## Doc ownership (what belongs where)
 

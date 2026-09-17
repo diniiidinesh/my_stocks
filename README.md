@@ -25,6 +25,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/TESTING_ORDERS.md](docs/TESTING_ORDERS.md)** | Order test cases + live handoff checklist |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Code layout and data flow |
 | **[docs/UPKEEP.md](docs/UPKEEP.md)** | How to keep docs accurate when code changes |
+| **[docs/RCA-2026-09-17.md](docs/RCA-2026-09-17.md)** | 2026-09-17 outage RCA — read before touching deployment or the confirm listener |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | How to read, change, and test this repo |
 | **[deploy/CLOUD.md](deploy/CLOUD.md)** | VM install (Lightsail / Oracle / EC2) |
 | **[deploy/COST.md](deploy/COST.md)** | Free tiers, intro credits, which VM to pick |
@@ -48,7 +49,12 @@ uv run nse-alert screen --force --max-symbols 20 --no-telegram
 1. Copy `.env.example` → `.env` and fill Kite + Telegram values.
 2. Kite app **Redirect URL:** `http://127.0.0.1:8765/callback`
 3. Each trading day: `uv run nse-alert login` (or `set-token …`)
-4. Set `FEED_MODE=kite`, then `uv run nse-alert watch`
+4. Set `FEED_MODE=kite`, then run the watcher **once, via one mechanism only:**
+   - Local/manual testing: `uv run nse-alert watch`
+   - Production VM: `docker compose up -d` (see [deploy/CLOUD.md](deploy/CLOUD.md)) —
+     never run this alongside the bare command or the systemd unit; two
+     watchers polling the same Telegram bot token silently breaks order
+     confirmation (see [docs/RCA-2026-09-17.md](docs/RCA-2026-09-17.md))
 5. After close: `uv run nse-alert report` and/or `uv run nse-alert screen`
 
 Details: [docs/LOGIN.md](docs/LOGIN.md) · alerts: [docs/ALERTS.md](docs/ALERTS.md) · orders: [docs/ORDERS.md](docs/ORDERS.md)

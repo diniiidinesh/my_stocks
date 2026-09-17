@@ -67,7 +67,7 @@ Nifty 500 ∪ Smallcap 250
 | Path | Role |
 |------|------|
 | `Dockerfile`, `docker-compose.yml` | Container run |
-| `deploy/nse-alert.service` | systemd unit |
+| `deploy/nse-alert.service` | systemd unit — non-Docker hosts only; never run alongside Docker (see [RCA-2026-09-17.md](RCA-2026-09-17.md)) |
 | `deploy/CLOUD.md` | VM install + screener cron |
 | `deploy/COST.md` | Provider comparison |
 | `universes/liquid_sample.txt` | Safe starter watchlist |
