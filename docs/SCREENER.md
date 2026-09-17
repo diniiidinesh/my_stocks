@@ -71,10 +71,16 @@ uv run nse-alert screen --force --max-symbols 20 --no-telegram
 
 Telegram (when `TELEGRAM_*` is set) receives a short summary **and** the `.xlsx` attachment.
 
-### Cron (Lightsail, IST)
+### Cron (Lightsail)
+
+The Lightsail box's clock is **UTC**, not IST — all crontab times below are
+UTC, with the equivalent IST time noted alongside. Cron does not source
+`.profile`, so `uv` (installed at `/home/ubuntu/.local/bin/uv`) is not on
+PATH by default; prepend a `PATH=` line or use `uv`'s absolute path.
 
 ```cron
-15 16 * * 1-5  cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1
+PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 15 * * 1-5   cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1   # 20:30 IST
 ```
 
 Refresh the Kite access token on trading days if you prefer Kite history (`SCREEN_PREFER_KITE_HISTORY=true`).

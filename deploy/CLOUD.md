@@ -249,10 +249,16 @@ Also useful after the session:
 uv run nse-alert report --telegram   # close % + hold-level counts from today's alerts
 ```
 
-Cron example (weekdays 16:15 IST — adjust TZ on the box):
+Cron example — **the Lightsail box's clock is UTC, not IST**; the times
+below are UTC with the IST equivalent noted. Cron does not source
+`.profile`, so `uv` is not on PATH by default — prepend a `PATH=` line
+(as below) or use `uv`'s absolute path (`/home/ubuntu/.local/bin/uv`):
 
 ```cron
-15 16 * * 1-5  cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1
+PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+5 10 * * 1-5   cd /opt/nse-alert && docker compose stop                                                              # 15:35 IST
+10 10 * * 1-5  cd /opt/nse-alert && docker compose run --rm nse-alert nse-alert report --telegram >> /var/log/nse-report.log 2>&1   # 15:40 IST
+0 15 * * 1-5   cd /opt/nse-alert && uv run nse-alert screen >> /var/log/nse-screen.log 2>&1                          # 20:30 IST
 ```
 
 See [docs/SCREENER.md](../docs/SCREENER.md) for filters, delivery %, and ranking.
