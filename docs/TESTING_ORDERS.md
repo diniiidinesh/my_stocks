@@ -43,7 +43,9 @@ uv run pytest -q tests/test_orders.py tests/test_engine.py tests/test_report.py
 | TC-SIZE-02 | Margins API unavailable | Fallback leverage × budget / price | `test_tc_margin_sizing_fallback_leverage` |
 | TC-CONFIRM-01 | Pending add / cancel / list | Lifecycle ok | `test_tc_confirm_pending_lifecycle` |
 | TC-CONFIRM-02 | Pending TTL expired | Dropped from list, status expired | `test_tc_confirm_pending_expires` |
-| TC-CONFIRM-03 | Telegram CONFIRM/CANCEL regex | Parses ids; ignores junk | `test_tc_confirm_telegram_regex` |
+| TC-CONFIRM-03 | Telegram CONFIRM/CANCEL regex | Parses ids; `/confirm@Bot`; ignores junk | `test_tc_confirm_telegram_regex` |
+| TC-CONFIRM-04 | Group confirm vs DM chat id | Command from group is accepted | `test_tc_confirm_group_message_accepted_even_if_chat_id_differs` |
+| TC-SIZE-03 | CLI `order` without `--qty` | Margin size, not TRADE_QTY=1 | `test_cli_order_without_qty_uses_margin_not_trade_qty` |
 | TC-BOOK-01 | New calendar day | `placed_count` resets | `test_tc_book_resets_on_new_calendar_day` |
 | TC-REPORT-01 | EOD close % + hold counts | Close section + held/fired | `tests/test_report.py` |
 
@@ -88,7 +90,7 @@ You must run these on your machine / Lightsail VM with a real Kite session.
 | ID | Steps | Pass criteria | Risk |
 |----|-------|---------------|------|
 | TC-HAND-01 | VM: `TRADE_MODE=dry_run`, live `FEED_MODE=kite`, small universe | Real +13% (or wait) produces dry-run Telegram/log only; **no** order in Kite; sizing note shows qty for ~₹10k margin | None |
-| TC-HAND-02 | `TRADE_MODE=confirm`, force a pending via alert or simulate | Telegram shows `CONFIRM <id>` with qty + sizing; `pending` lists it; `CANCEL` removes it | None until confirm |
+| TC-HAND-02 | `TRADE_MODE=confirm`, force a pending via alert or simulate | Telegram shows `/confirm <id>` with qty + sizing; `pending` lists it; `/cancel` removes it. Group: slash command + privacy off. | None until confirm |
 | TC-HAND-03 | Confirm a pending (margin-sized or fixed qty=1) on a liquid name | Kite shows MIS MARKET BUY + SL-Limit SELL; fill then SL; app records position | **Real money** |
 | TC-HAND-04 | `TRADE_MODE=auto`, `TRADE_MAX_ORDERS_PER_DAY=1` | On first +13% UP: auto BUY+SL without confirm; second symbol blocked by cap/position rules | **Real money** |
 | TC-HAND-05 | ASM-tagged name alerts | Tag appears; if you try live buy, Kite may **reject** ASM (expected broker behaviour) | Awareness |

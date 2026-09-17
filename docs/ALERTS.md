@@ -59,6 +59,14 @@ Behaviour:
 
 Reference: [Zerodha Resources → Utilities](https://zerodha.com/resources/) → consolidated RMS list.
 
+## Telegram destination (DM vs group)
+
+`TELEGRAM_CHAT_ID` is where **alerts** are sent. A private chat id is a positive number; a group/supergroup id is **negative** (often `-100…`).
+
+If you added the bot to a group but confirms do nothing, see [ORDERS.md](ORDERS.md) (slash `/confirm <id>`, BotFather privacy, `nse-alert telegram-chats`).
+
+**Login impact:** none — Telegram is independent of Kite.
+
 ## Telegram / console message shape
 
 ```text

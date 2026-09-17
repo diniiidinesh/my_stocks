@@ -64,6 +64,21 @@ Optional: make the IP sticky via **Networking → IP Management → Reserved pub
    `http://13.232.x.x:8765/callback`
    (or keep login local and only `set-token` on the server — see below).
 
+## AWS console login (root vs IAM)
+
+Use an **IAM user** (or IAM Identity Center) for daily Lightsail/EC2 work. Do not use the **root** user except for billing, account recovery, and creating that first IAM user.
+
+Root working only in **incognito** is usually the **browser**, not AWS randomly locking you: leftover `aws.amazon.com` cookies, a password-manager fill, or an extension. Clearing site cookies for Amazon/AWS in the normal profile often fixes it. It is common enough to be annoying; it is not a reason to keep using root.
+
+Create:
+
+1. IAM → **Users** → Create user (e.g. `nse-alert-ops`).
+2. Attach a tight policy (Lightsail **or** EC2 + Elastic IP + the instance SG — not `AdministratorAccess`).
+3. Enable **MFA** on that user **and** on root.
+4. Sign in at the **account IAM sign-in URL** (Account ID + IAM user), not the root email form.
+
+Keep root in a password manager + MFA; use it rarely.
+
 ## Install on the VM
 
 ```bash
@@ -181,7 +196,8 @@ Confirm a pending id:
 ```bash
 docker compose run --rm nse-alert nse-alert pending
 docker compose run --rm nse-alert nse-alert confirm ABC123
-# or reply in Telegram: CONFIRM ABC123
+# in Telegram (slash command, especially in groups): /confirm ABC123
+docker compose run --rm nse-alert nse-alert telegram-chats
 ```
 
 ## EOD TA screener (Excel + Telegram)

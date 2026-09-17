@@ -10,6 +10,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | Understand alert rules (4% F&O, ASM, EOD close report) | [ALERTS.md](ALERTS.md) |
 | Set up / renew Kite login | [LOGIN.md](LOGIN.md) |
 | Enable MIS test orders (sizing, SL trail) | [ORDERS.md](ORDERS.md) |
+| Fix group Telegram confirms / copy chat id | [ORDERS.md](ORDERS.md) → Telegram groups |
 | Run the EOD TA screener (Excel + Telegram) | [SCREENER.md](SCREENER.md) |
 | Test auto/dry-run/confirm orders | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Pick a cloud VM / free tier | [../deploy/COST.md](../deploy/COST.md) |

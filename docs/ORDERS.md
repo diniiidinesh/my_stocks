@@ -46,6 +46,14 @@ Example: ₹10,000 budget, stock needs ₹2,000 margin/share at its MIS leverage
 - Offline dry_run: `qty ≈ floor(TRADE_MARGIN_INR × TRADE_FALLBACK_LEVERAGE / price)`  
 - `TRADE_SIZING=fixed`: always `TRADE_QTY`
 
+**Do not comment out `TRADE_QTY=1` hoping to unlock ₹10k size.** That variable is ignored when `TRADE_SIZING=margin` (the default). If a live/confirm order still shows **1 share**, check:
+
+1. `.env` has `TRADE_SIZING=margin` and `TRADE_MARGIN_INR=10000` (then **rebuild/restart** `watch`).
+2. Watch logs: `sizing=margin budget=₹10000 | TRADE_QTY=1 unused`.
+3. Confirm / dry-run Telegram line `Sizing: …` — it states why qty is what it is.
+4. Expensive names can correctly size to **1** if one share’s MIS margin is already ≥ ₹10k.
+5. `nse-alert order … --qty 1` is an explicit override; omit `--qty` to use margin sizing (needs a Kite token so LTP can be fetched).
+
 Confirm Telegram messages include the sizing note (qty, ₹/share, leverage, notional).
 
 ### Why MIS?
@@ -70,21 +78,42 @@ CNC sell-SL right after a buy often fails (needs holdings). Same-day exit needs 
 |------|-----------|
 | `off` | Alerts only |
 | `dry_run` | Log + Telegram pretend orders; nothing hits Kite |
-| `confirm` | Telegram `CONFIRM <id>` / `CANCEL <id>` before place |
+| `confirm` | Telegram `/confirm <id>` / `/cancel <id>` before place |
 | `auto` | Places immediately when filter matches |
 
 Recommended path: `dry_run` → `confirm` → (maybe) `auto`.
 
+### Telegram groups (confirm does nothing)
+
+Default BotFather **privacy** means a group bot only sees **slash commands**, @mentions, and replies to itself. Typing `CONFIRM abc123` as a normal group message is silently dropped.
+
+1. Use the slash command: `/confirm abc123` (also `/confirm@YourBot abc123`).
+2. In [@BotFather](https://t.me/BotFather): `/setprivacy` → pick the bot → **Disable**. Then remove + re-add the bot to the group (or wait a bit).
+3. `TELEGRAM_CHAT_ID` must be the **group** id (negative, often `-100…`) if you want **alerts** in that group. Discover it:
+
+```bash
+# stop watch first so this can peek at getUpdates
+uv run nse-alert telegram-chats
+```
+
+Send any message in the group, re-run `telegram-chats`, copy the id into `.env`, restart `watch`. Confirm commands are accepted from the group even if `TELEGRAM_CHAT_ID` is still your DM — but then results/alerts still go to the DM.
+
+4. `TRADE_MODE=confirm` and `watch` must be running; otherwise there is no listener.
+
+Fallback: `uv run nse-alert confirm ABC123` on the VM.
+
 ## CLI helpers
 
 ```bash
-uv run nse-alert order buy RELIANCE --qty 1 --dry-run
+uv run nse-alert order buy RELIANCE --dry-run          # margin-sized (needs token)
+uv run nse-alert order buy RELIANCE --qty 1 --dry-run  # explicit 1 share
 uv run nse-alert order buy RELIANCE --qty 1 --live
 uv run nse-alert pending
 uv run nse-alert confirm ABC123
+uv run nse-alert telegram-chats
 ```
 
-Manual `order` CLI still uses `--qty` (explicit). Auto/confirm from alerts use margin sizing unless `TRADE_SIZING=fixed`.
+Alert-driven auto/confirm orders use margin sizing unless `TRADE_SIZING=fixed`. Manual `order` without `--qty` does the same (needs LTP via Kite). `--qty N` always wins.
 
 ## Compliance notes
 

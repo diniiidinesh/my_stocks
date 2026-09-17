@@ -203,7 +203,8 @@ def watch_cmd(
                 f"Entry≈`{alert.ltp:.2f}` → SL-Limit trigger≈`{stop_px:.2f}` "
                 f"limit≈`{limit_px:.2f}` (-{settings.trade_stop_loss_pct:g}%)\n"
                 f"Sizing: {req.reason}\n\n"
-                f"Reply: `CONFIRM {pending.id}` or `CANCEL {pending.id}`\n"
+                f"Reply: `/confirm {pending.id}` or `/cancel {pending.id}`\n"
+                f"(slash command — required in groups with default bot privacy)\n"
                 f"Or: `uv run nse-alert confirm {pending.id}`"
             )
             logger.info("Pending order %s for %s", pending.id, req.symbol)
@@ -234,9 +235,14 @@ def watch_cmd(
 
     threshold_label = ",".join(f"{t:g}" for t in thresholds)
     fo_only_label = ",".join(f"{t:g}" for t in fo_only) if fo_only else "none"
+    qty_note = (
+        f"TRADE_QTY={executor.default_qty} unused (TRADE_SIZING=margin)"
+        if executor.sizing_mode == "margin"
+        else f"TRADE_QTY={executor.default_qty}"
+    )
     logger.info(
         "Watching %d symbols | thresholds=±%s%% | fo_only=±%s%% (%d F&O) | "
-        "asm=%d | feed=%s | telegram=%s | trade=%s",
+        "asm=%d | feed=%s | telegram=%s | trade=%s | sizing=%s budget=₹%.0f | %s",
         len(instruments),
         threshold_label,
         fo_only_label,
@@ -245,6 +251,9 @@ def watch_cmd(
         feed_mode,
         "yes" if settings.telegram_configured else "console-only",
         executor.mode,
+        executor.sizing_mode,
+        executor.margin_budget_inr,
+        qty_note,
     )
 
     price_feed: MockFeed | KiteFeed
@@ -473,6 +482,47 @@ def report_cmd(report_date: object | None, telegram: bool) -> None:
         )
 
 
+def _quote_ltp(settings: Settings, symbol: str) -> float:
+    """Best-effort NSE LTP for CLI margin sizing. 0 if unavailable."""
+    if not settings.kite_api_key or not settings.kite_access_token:
+        return 0.0
+    try:
+        kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+        payload = kite.quote([f"NSE:{symbol.upper()}"])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not fetch LTP for %s: %s", symbol, exc)
+        return 0.0
+    row = payload.get(f"NSE:{symbol.upper()}") if isinstance(payload, dict) else None
+    if not isinstance(row, dict):
+        return 0.0
+    ltp = row.get("last_price") or (row.get("ohlc") or {}).get("close") or 0
+    try:
+        return float(ltp)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _cli_size_quantity(
+    settings: Settings,
+    executor: OrderExecutor,
+    symbol: str,
+    side: str,
+) -> tuple[int, str]:
+    """Size a manual CLI order. TRADE_QTY is only used when TRADE_SIZING=fixed."""
+    if executor.sizing_mode != "margin":
+        qty = max(1, int(settings.trade_qty))
+        return qty, f"fixed TRADE_QTY={qty}"
+    px = _quote_ltp(settings, symbol)
+    if px <= 0:
+        raise click.ClickException(
+            "No --qty given and could not fetch LTP for margin sizing. "
+            "Pass --qty N, or run `nse-alert login` so TRADE_MARGIN_INR can size "
+            "the order. Commenting out TRADE_QTY=1 does not enable 10k sizing — "
+            "set TRADE_SIZING=margin (default) instead."
+        )
+    return executor.size_quantity(symbol=symbol, price=px, side=side)  # type: ignore[arg-type]
+
+
 def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:
     symbols = {i.symbol for i in instruments}
     if "DEMO13" not in symbols:
@@ -492,7 +542,12 @@ def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:
 @main.command("order")
 @click.argument("side", type=click.Choice(["buy", "sell"], case_sensitive=False))
 @click.argument("symbol")
-@click.option("--qty", type=int, default=None, help="Quantity (default TRADE_QTY)")
+@click.option(
+    "--qty",
+    type=int,
+    default=None,
+    help="Quantity (omit to use TRADE_SIZING / TRADE_MARGIN_INR)",
+)
 @click.option(
     "--dry-run/--live",
     default=True,
@@ -503,17 +558,22 @@ def order_cmd(side: str, symbol: str, qty: int | None, dry_run: bool) -> None:
     settings = Settings()
     book = OrderBook(settings.state_dir / "orders.json")
     executor = _build_executor(settings, book)
+    txn: str = "BUY" if side.lower() == "buy" else "SELL"
+    size_note = "manual CLI order"
+    if qty is None:
+        qty, size_note = _cli_size_quantity(settings, executor, symbol.upper(), txn)
+        click.echo(f"Sizing: {size_note}")
     request = OrderRequest(
         symbol=symbol.upper(),
-        side="BUY" if side.lower() == "buy" else "SELL",
-        quantity=qty if qty is not None else settings.trade_qty,
+        side=txn,  # type: ignore[arg-type]
+        quantity=qty,
         product=settings.trade_product,
         order_type=settings.trade_order_type,
         price=None,
         trigger_price=None,
         market_protection=settings.trade_market_protection,
         tag="nsealrt",
-        reason="manual CLI order",
+        reason=size_note,
     )
     mode = "dry_run" if dry_run else "auto"
     if mode == "auto" and (not settings.kite_api_key or not settings.kite_access_token):
@@ -698,6 +758,67 @@ def screen_cmd(
         tg.send_document(excel, caption=f"EOD screener {result.as_of.isoformat()}")
     elif telegram:
         logger.warning("Telegram not configured — Excel saved locally only")
+
+
+@main.command("telegram-chats")
+def telegram_chats_cmd() -> None:
+    """List recent chats this bot can see (copy a group id into TELEGRAM_CHAT_ID).
+
+    Stop `watch` first so this command can peek at getUpdates. Then send any
+    message in the group (or `/confirm test` — it will not place an order)
+    and re-run this command.
+    """
+    import httpx
+
+    from nse_alert.confirm_bot import summarize_chats
+
+    settings = Settings()
+    if not settings.telegram_bot_token:
+        raise click.ClickException("Set TELEGRAM_BOT_TOKEN in .env")
+    token = settings.telegram_bot_token
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{token}/deleteWebhook",
+            json={"drop_pending_updates": False},
+            timeout=10.0,
+        ).raise_for_status()
+        resp = httpx.get(
+            f"https://api.telegram.org/bot{token}/getUpdates",
+            params={"timeout": 0},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except httpx.HTTPError as exc:
+        raise click.ClickException(f"Telegram API failed: {exc}") from exc
+    if not payload.get("ok", True):
+        raise click.ClickException(f"Telegram error: {payload.get('description')}")
+    chats = summarize_chats(payload.get("result") or [])
+    click.echo(f"Configured TELEGRAM_CHAT_ID={settings.telegram_chat_id or '(empty)'}")
+    if not chats:
+        click.echo(
+            "No recent messages. Add the bot to the group, send a message there, "
+            "then run this again (stop `watch` first). Group ids are negative, "
+            "e.g. -1001234567890."
+        )
+        return
+    click.echo("Recent chats this bot can see:\n")
+    for chat in chats:
+        mark = (
+            "  ← current TELEGRAM_CHAT_ID"
+            if chat["id"] == str(settings.telegram_chat_id).strip()
+            else ""
+        )
+        click.echo(
+            f"  {chat['id']}  [{chat['type']}] {chat['title'] or '(no title)'}{mark}"
+        )
+        if chat["text"]:
+            click.echo(f"      last: {chat['text']}")
+    click.echo(
+        "\nTo receive alerts in a group, set TELEGRAM_CHAT_ID to that group's id, "
+        "then in BotFather: /setprivacy → Disable (so non-slash messages are seen). "
+        "Confirms should use `/confirm <id>`."
+    )
 
 
 @main.command("login-hint")

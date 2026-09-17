@@ -332,23 +332,165 @@ def test_tc_confirm_pending_expires(tmp_path: Path) -> None:
         ("CONFIRM abc123", "confirm", "ABC123"),
         ("confirm ABCDEF", "confirm", "ABCDEF"),
         ("/confirm dead01", "confirm", "DEAD01"),
+        ("/confirm@MyBot dead01", "confirm", "DEAD01"),
+        ("/CONFIRM@nse_alert_bot ABC123", "confirm", "ABC123"),
         ("CANCEL ab12", "cancel", "AB12"),
         ("cancel FF00AA", "cancel", "FF00AA"),
+        ("/cancel@MyBot ab12", "cancel", "AB12"),
         ("hello", None, None),
         ("CONFIRM", None, None),
+        ("/confirm@MyBot", None, None),
     ],
 )
 def test_tc_confirm_telegram_regex(text: str, kind: str | None, pid: str | None) -> None:
+    from nse_alert.confirm_bot import parse_trade_command
+
+    parsed = parse_trade_command(text)
     cm = _CONFIRM_RE.match(text)
     xm = _CANCEL_RE.match(text)
     if kind == "confirm":
+        assert parsed == ("confirm", pid)
         assert cm and cm.group(1).upper() == pid
         assert not xm
     elif kind == "cancel":
+        assert parsed == ("cancel", pid)
         assert xm and xm.group(1).upper() == pid
         assert not cm
     else:
+        assert parsed is None
         assert not cm and not xm
+
+
+def test_tc_confirm_group_message_accepted_even_if_chat_id_differs() -> None:
+    """Group confirms used to be dropped when TELEGRAM_CHAT_ID was the DM id."""
+    from nse_alert.confirm_bot import TelegramConfirmListener
+
+    seen: list[tuple[str, str]] = []
+    listener = TelegramConfirmListener(
+        bot_token="x",
+        chat_id="11111",  # private chat
+        on_confirm=lambda pid: seen.append(("confirm", pid)),
+        on_cancel=lambda pid: seen.append(("cancel", pid)),
+    )
+    listener._handle(  # noqa: SLF001
+        {
+            "message": {
+                "chat": {"id": -1001234567890, "type": "supergroup", "title": "trades"},
+                "text": "/confirm@MyBot abc123",
+            }
+        }
+    )
+    assert seen == [("confirm", "ABC123")]
+    listener._handle(  # noqa: SLF001
+        {
+            "edited_message": {
+                "chat": {"id": -1001234567890, "type": "supergroup", "title": "trades"},
+                "text": "/cancel DEF456",
+            }
+        }
+    )
+    assert seen == [("confirm", "ABC123"), ("cancel", "DEF456")]
+
+
+def test_tc_confirm_chat_id_normalizes_quotes_and_spaces() -> None:
+    from nse_alert.confirm_bot import TelegramConfirmListener
+
+    seen: list[str] = []
+    listener = TelegramConfirmListener(
+        bot_token="x",
+        chat_id=' "-10099" ',
+        on_confirm=lambda pid: seen.append(pid),
+    )
+    listener._handle(  # noqa: SLF001
+        {"message": {"chat": {"id": -10099, "type": "group"}, "text": "confirm ab12"}}
+    )
+    assert seen == ["AB12"]
+
+
+def test_summarize_chats_dedupes_group_and_dm() -> None:
+    from nse_alert.confirm_bot import summarize_chats
+
+    chats = summarize_chats(
+        [
+            {
+                "message": {
+                    "chat": {"id": 42, "type": "private", "first_name": "Dinesh"},
+                    "text": "hi",
+                }
+            },
+            {
+                "message": {
+                    "chat": {
+                        "id": -1001,
+                        "type": "supergroup",
+                        "title": "alerts",
+                    },
+                    "text": "/confirm abc",
+                }
+            },
+            {
+                "edited_message": {
+                    "chat": {"id": 42, "type": "private", "first_name": "Dinesh"},
+                    "text": "again",
+                }
+            },
+        ]
+    )
+    ids = {c["id"] for c in chats}
+    assert ids == {"42", "-1001"}
+    group = next(c for c in chats if c["id"] == "-1001")
+    assert group["type"] == "supergroup"
+    assert group["title"] == "alerts"
+
+
+def test_cli_order_without_qty_uses_margin_not_trade_qty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Commenting out TRADE_QTY=1 is not required; omit --qty + margin sizing."""
+    from nse_alert.cli import _cli_size_quantity
+    from nse_alert.config import Settings
+
+    class _MarginKite(_FakeKite):
+        def quote(self, keys: list[str]) -> dict[str, Any]:
+            return {"NSE:INFY": {"last_price": 1500.0}}
+
+        def order_margins(self, params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [{"total": 2000.0, "leverage": 5.0}]
+
+    settings = Settings(
+        TRADE_SIZING="margin",
+        TRADE_MARGIN_INR=10_000,
+        TRADE_QTY=1,
+        KITE_API_KEY="k",
+        KITE_ACCESS_TOKEN="t",
+    )
+    ex = _executor(
+        tmp_path,
+        mode="dry_run",
+        api_key="k",
+        access_token="t",
+        sizing_mode="margin",
+        margin_budget_inr=10_000,
+        default_qty=1,
+    )
+    fake = _MarginKite()
+    monkeypatch.setattr("nse_alert.cli._kite_client", lambda *a, **k: fake)
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    qty, note = _cli_size_quantity(settings, ex, "INFY", "BUY")
+    assert qty == 5
+    assert "5 shares" in note
+
+
+def test_cli_order_without_qty_requires_ltp_in_margin_mode(tmp_path: Path) -> None:
+    import click
+
+    from nse_alert.cli import _cli_size_quantity
+    from nse_alert.config import Settings
+
+    settings = Settings(TRADE_SIZING="margin", TRADE_QTY=1)
+    ex = _executor(tmp_path, sizing_mode="margin", default_qty=1)
+    with pytest.raises(click.ClickException, match="TRADE_QTY=1"):
+        _cli_size_quantity(settings, ex, "INFY", "BUY")
 
 
 # ---------------------------------------------------------------------------

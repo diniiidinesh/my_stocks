@@ -367,7 +367,11 @@ class OrderExecutor:
         ``margin`` mode: query Kite MIS margin for 1 share, then
         ``qty = floor(budget / margin_per_share)`` so deployed capital ≈ budget
         at that stock's leverage. Falls back to ``price / fallback_leverage``
-        when margins API is unavailable (e.g. dry_run without token).
+        when margins API are unavailable (e.g. dry_run without token).
+
+        ``TRADE_QTY`` (default 1) is **ignored** in margin mode — commenting it
+        out does not change alert/auto size. Pass ``quantity=`` only for an
+        explicit override (CLI ``--qty``).
         """
         if quantity is not None:
             qty = max(1, int(quantity))
@@ -600,6 +604,7 @@ class OrderExecutor:
         qty, size_note = self.size_quantity(
             symbol=symbol, price=px or 1.0, side=side, quantity=quantity
         )
+        logger.info("Sized %s %s → %s", side, symbol, size_note)
         return OrderRequest(
             symbol=symbol,
             side=side,

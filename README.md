@@ -65,6 +65,7 @@ nse-alert screen [--force] [--telegram/--no-telegram] [--max-symbols N]
 nse-alert order buy|sell SYMBOL [--qty N] [--dry-run|--live]
 nse-alert pending
 nse-alert confirm ID
+nse-alert telegram-chats            # list group/DM ids for TELEGRAM_CHAT_ID
 nse-alert login-hint
 ```
 
