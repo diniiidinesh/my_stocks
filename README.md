@@ -22,6 +22,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/LOGIN.md](docs/LOGIN.md)** | Daily Kite token (`login` / `set-token`) |
 | **[docs/ORDERS.md](docs/ORDERS.md)** | Dry-run / confirm / auto, sizing, SL trail |
 | **[docs/SCREENER.md](docs/SCREENER.md)** | EOD TA screener → Excel + Telegram |
+| **[docs/RESEARCH.md](docs/RESEARCH.md)** | VM alert backtests (`nse-alert research`) |
 | **[docs/TESTING_ORDERS.md](docs/TESTING_ORDERS.md)** | Order test cases + live handoff checklist |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Code layout and data flow |
 | **[docs/UPKEEP.md](docs/UPKEEP.md)** | How to keep docs accurate when code changes |
@@ -62,6 +63,8 @@ nse-alert watch [--threshold 4,7,11,13] [--feed mock|kite] [--max-ticks N]
 nse-alert universe [--min-turnover-cr 25] [--min-price 20]
 nse-alert report [--date YYYY-MM-DD] [--telegram]
 nse-alert screen [--force] [--telegram/--no-telegram] [--max-symbols N]
+nse-alert research analyze [--date YYYY-MM-DD ...]
+nse-alert research backtest [--days 60] [--max-symbols 40]
 nse-alert order buy|sell SYMBOL [--qty N] [--dry-run|--live]
 nse-alert size SYMBOL [--price N]   # explain qty for TRADE_MARGIN_INR (no order)
 nse-alert pending

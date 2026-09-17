@@ -47,9 +47,10 @@ Nifty 500 ∪ Smallcap 250
 
 | File / package | Responsibility |
 |----------------|----------------|
-| `cli.py` | Click commands; wires watch/report/screen/login/orders |
+| `cli.py` | Click commands; wires watch/report/screen/login/orders/research |
 | `config.py` | `Settings` from env / `.env` |
 | `engine.py` | `%` move, multi-threshold dedupe, FO-only gate, ASM/F&O flags |
+| `research/` | Offline alert analyze + Kite bar backtests (`nse-alert research`) |
 | `universe.py` | NSE EQ instruments + quote liquidity screen |
 | `surveillance.py` | NFO underlyings + Zerodha ASM sheet |
 | `feed.py` | `MockFeed`, `KiteFeed` WebSocket |
@@ -78,6 +79,8 @@ Nifty 500 ∪ Smallcap 250
 | File / dir | Purpose |
 |------------|---------|
 | `fired.json` | Today’s dedupe keys + alert events |
+| `fired-YYYY-MM-DD.json` | Optional archived days for `research analyze` |
+| `research/` | Backtest caches, summary txt, trades CSV |
 | `report-YYYY-MM-DD.txt` | EOD alert report |
 | `orders.json` | Pending / placed / open SL tracks |
 | `asm_symbols.txt` | Cached ASM list |
@@ -94,6 +97,7 @@ tests/test_report.py
 tests/test_surveillance.py
 tests/test_orders.py
 tests/test_screener.py
+tests/test_research.py
 tests/test_envfile.py
 ```
 

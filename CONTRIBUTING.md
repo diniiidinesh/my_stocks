@@ -49,6 +49,7 @@ Requires Python **3.12+** (see `pyproject.toml`).
 | Login | `login_ui.py`, `envfile.py` |
 | Universe | `universe.py` |
 | Cloud install text | `deploy/CLOUD.md`, `deploy/COST.md` |
+| Alert research / backtests | `research/`, `docs/RESEARCH.md`, `tests/test_research.py` |
 
 ## Tests
 
