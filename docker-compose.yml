@@ -10,7 +10,9 @@ services:
       # Prefer kite in cloud; override in .env if needed
       FEED_MODE: ${FEED_MODE:-kite}
     volumes:
-      - nse_alert_data:/data
+      # Bind-mount so `uv run nse-alert confirm` on the host sees the same
+      # orders.json as the container (named volumes caused "No pending order").
+      - ./.nse_alert:/data/.nse_alert
       - ./universes:/app/universes:ro
       - ./.env:/app/.env:ro
     # Uncomment when running `docker compose run --service-ports nse-alert nse-alert login`
@@ -21,6 +23,3 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
-
-volumes:
-  nse_alert_data:

@@ -407,6 +407,26 @@ def test_tc_confirm_chat_id_normalizes_quotes_and_spaces() -> None:
     assert seen == ["AB12"]
 
 
+def test_pending_not_found_message_includes_path_and_known_ids(tmp_path: Path) -> None:
+    from nse_alert.cli import _pending_not_found_msg
+    from nse_alert.config import Settings
+
+    book = OrderBook(tmp_path / "orders.json")
+    book.add_pending(
+        _buy_req("INFY"),
+        alert_symbol="INFY",
+        alert_threshold=13.0,
+        alert_direction="UP",
+        entry_ltp=1500.0,
+    )
+    settings = Settings(STATE_DIR=tmp_path)
+    msg = _pending_not_found_msg(settings, book, "156A78")
+    assert "156A78" in msg
+    assert str(tmp_path / "orders.json") in msg
+    assert "ids=" in msg
+    assert "Docker" in msg
+
+
 def test_summarize_chats_dedupes_group_and_dm() -> None:
     from nse_alert.confirm_bot import summarize_chats
 

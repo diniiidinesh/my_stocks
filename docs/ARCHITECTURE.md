@@ -57,6 +57,7 @@ Nifty 500 ∪ Smallcap 250
 | `notify/telegram.py` | Console + Telegram text + document upload |
 | `orders.py` | Order book, margin sizing, dry-run/confirm/auto, SL-Limit, trail |
 | `confirm_bot.py` | Telegram `/confirm` / `/cancel` listener (groups + DMs) |
+| `ipv4.py` | Optional IPv4-only DNS so Kite sees the Elastic IP |
 | `login_ui.py` | Local OAuth / paste-token UI |
 | `envfile.py` | `.env` read/write helpers |
 | `screener/` | EOD TA screener (indicators, history, delivery, Excel export) |

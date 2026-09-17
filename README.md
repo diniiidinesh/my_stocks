@@ -66,6 +66,7 @@ nse-alert order buy|sell SYMBOL [--qty N] [--dry-run|--live]
 nse-alert size SYMBOL [--price N]   # explain qty for TRADE_MARGIN_INR (no order)
 nse-alert pending
 nse-alert confirm ID
+nse-alert public-ip                 # IPv4/IPv6 egress for Kite whitelist
 nse-alert telegram-chats            # list group/DM ids for TELEGRAM_CHAT_ID
 nse-alert login-hint
 ```

@@ -69,7 +69,7 @@ Order API calls must originate from a **whitelisted static IP**. Market-data Web
 | Redirect “connection refused” on 127.0.0.1 | Expected if the login UI isn’t running — start `nse-alert login` first, or copy `request_token` from the URL and use the UI paste / official exchange flow |
 | WebSocket 403 | Paid Connect plan required; check API key |
 | Empty universe / quote HTML errors | Use `CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt` |
-| Orders rejected for IP | Add VM static IP under Kite Profile → IP Whitelist |
+| Orders rejected for IP | Whitelist the **egress** IP Kite prints in the error. On AWS, that is often **IPv6** even if you added an Elastic IPv4. This app defaults `KITE_FORCE_IPV4=true`. Check with `nse-alert public-ip`. You may change the Kite whitelist **once per calendar week**. |
 
 ## Related code
 

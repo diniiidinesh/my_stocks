@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     kite_api_key: str = Field(default="", alias="KITE_API_KEY")
     kite_api_secret: str = Field(default="", alias="KITE_API_SECRET")
     kite_access_token: str = Field(default="", alias="KITE_ACCESS_TOKEN")
+    # AWS dual-stack VMs otherwise place orders via IPv6 (not the Elastic IPv4)
+    kite_force_ipv4: bool = Field(default=True, alias="KITE_FORCE_IPV4")
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")

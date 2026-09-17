@@ -161,6 +161,39 @@ Note: **order** API calls must originate from the **whitelisted static IP**.
 Market-data WebSocket can come from anywhere, but if watch+orders run together,
 run them on the cloud box.
 
+### IPv6 vs Elastic IPv4 (Kite “IP is not allowed”)
+
+AWS dual-stack instances often send `place_order` over **IPv6** even when you
+whitelisted the Elastic **IPv4**. The error shows the address Kite actually saw,
+e.g. `2406:da1a:…`. IPv4 and IPv6 are not interchangeable. You may change the
+Kite whitelist **once per calendar week**.
+
+Preferred fix (this repo default): `KITE_FORCE_IPV4=true` so orders use the
+Elastic IPv4. Then whitelist that IPv4 only.
+
+```bash
+uv run nse-alert public-ip
+# IPv4 egress must match Kite Profile → IP Whitelist
+```
+
+Alternatively add the IPv6 from the error as the **secondary** IP (max 2).
+Do not burn the weekly change if IPv4-forcing will do.
+
+### Same STATE_DIR for watch and confirm
+
+`watch` writes pending ids to `STATE_DIR/orders.json`. `nse-alert confirm` /
+`pending` must open **that same file**. Mixing Docker (old named volume) with
+`uv run` on the host produced `No pending order …`. Compose now bind-mounts
+`./.nse_alert`. Always:
+
+```bash
+cd /opt/nse-alert
+uv run nse-alert pending          # prints the file path
+uv run nse-alert confirm ABC123
+```
+
+If watch is Docker-only: `docker compose exec nse-alert nse-alert pending`.
+
 ## Run the watcher
 
 ```bash

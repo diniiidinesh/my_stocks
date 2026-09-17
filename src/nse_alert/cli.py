@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from nse_alert.config import Settings
+from nse_alert.ipv4 import force_ipv4
 from nse_alert.confirm_bot import TelegramConfirmListener
 from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.feed import KiteFeed, MockFeed
@@ -242,7 +242,8 @@ def watch_cmd(
     )
     logger.info(
         "Watching %d symbols | thresholds=±%s%% | fo_only=±%s%% (%d F&O) | "
-        "asm=%d | feed=%s | telegram=%s | trade=%s | sizing=%s budget=₹%.0f | %s",
+        "asm=%d | feed=%s | telegram=%s | trade=%s | sizing=%s budget=₹%.0f | %s | "
+        "orders=%s",
         len(instruments),
         threshold_label,
         fo_only_label,
@@ -254,6 +255,7 @@ def watch_cmd(
         executor.sizing_mode,
         executor.margin_budget_inr,
         qty_note,
+        (settings.state_dir / "orders.json").resolve(),
     )
 
     price_feed: MockFeed | KiteFeed
@@ -325,6 +327,8 @@ def watch_cmd(
 
 
 def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
+    if settings.kite_force_ipv4:
+        force_ipv4()
     return OrderExecutor(
         api_key=settings.kite_api_key,
         access_token=settings.kite_access_token,
@@ -348,6 +352,21 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
     )
 
 
+def _pending_not_found_msg(
+    settings: Settings, book: OrderBook, pending_id: str
+) -> str:
+    path = (settings.state_dir / "orders.json").resolve()
+    known = sorted(book._data.get("pending", {}).keys())  # noqa: SLF001
+    known_s = ", ".join(known) if known else "(none)"
+    return (
+        f"No pending order `{pending_id}` in {path} "
+        f"(book date={book._data.get('date')}, ids={known_s}). "  # noqa: SLF001
+        "Confirm on the same machine as `watch`, using the same STATE_DIR. "
+        "Docker watch: `docker compose exec nse-alert nse-alert confirm ID` "
+        "(do not mix Docker volume vs host `.nse_alert`)."
+    )
+
+
 def _confirm_pending(
     settings: Settings,
     executor: OrderExecutor,
@@ -357,10 +376,10 @@ def _confirm_pending(
 ) -> None:
     item = book.get_pending(pending_id)
     if item is None:
-        msg = f"No pending order `{pending_id}`"
+        msg = _pending_not_found_msg(settings, book, pending_id)
         logger.warning("%s", msg)
         if tg:
-            tg.send_text(msg, parse_mode="Markdown")
+            tg.send_text(msg)
         return
     if item.status != "pending":
         msg = f"Pending `{pending_id}` is already {item.status}"
@@ -643,7 +662,9 @@ def size_cmd(symbol: str, price: float | None) -> None:
 def pending_cmd() -> None:
     """List orders waiting for Telegram/CLI confirmation."""
     settings = Settings()
+    path = (settings.state_dir / "orders.json").resolve()
     book = OrderBook(settings.state_dir / "orders.json")
+    click.echo(f"Order book: {path}  (date={book._data.get('date')})")  # noqa: SLF001
     items = book.list_pending()
     if not items:
         click.echo("No pending confirmations")
@@ -672,7 +693,9 @@ def confirm_cmd(pending_id: str) -> None:
     _confirm_pending(settings, executor, book, pending_id.upper(), tg)
     item = book.get_pending(pending_id)
     if item is None:
-        raise click.ClickException(f"Unknown pending id {pending_id}")
+        raise click.ClickException(
+            _pending_not_found_msg(settings, book, pending_id.upper())
+        )
     click.echo(f"Pending {pending_id} → {item.status}")
 
 
@@ -873,6 +896,30 @@ def telegram_chats_cmd() -> None:
         "\nTo receive alerts in a group, set TELEGRAM_CHAT_ID to that group's id, "
         "then in BotFather: /setprivacy → Disable (so non-slash messages are seen). "
         "Confirms should use `/confirm <id>`."
+    )
+
+
+@main.command("public-ip")
+def public_ip_cmd() -> None:
+    """Show this machine's public IPv4 and IPv6 (what Kite whitelist sees)."""
+    import httpx
+
+    def _fetch(url: str) -> str:
+        try:
+            return httpx.get(url, timeout=8.0).text.strip()
+        except httpx.HTTPError as exc:
+            return f"(failed: {exc})"
+
+    v4 = _fetch("https://api.ipify.org")
+    v6 = _fetch("https://api6.ipify.org")
+    click.echo(f"IPv4 egress: {v4}")
+    click.echo(f"IPv6 egress: {v6}")
+    click.echo(
+        "Kite Profile → IP Whitelist must contain the address that "
+        "`place_order` actually uses. AWS dual-stack often uses IPv6 even "
+        "when an Elastic IPv4 is attached. This app defaults to "
+        "KITE_FORCE_IPV4=true so orders go out the IPv4. "
+        "You can change the whitelist only once per calendar week."
     )
 
 

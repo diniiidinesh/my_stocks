@@ -115,7 +115,9 @@ Send any message in the group, re-run `telegram-chats`, copy the id into `.env`,
 
 4. `TRADE_MODE=confirm` and `watch` must be running; otherwise there is no listener.
 
-Fallback: `uv run nse-alert confirm ABC123` on the VM.
+Fallback: `uv run nse-alert confirm ABC123` on the VM (same dir as `watch`). If you see **No pending order**, run `nse-alert pending` — it prints the `orders.json` path. Docker watch and host `uv run` must share `./.nse_alert`.
+
+Kite **IP is not allowed** with an `2406:…` address: the VM sent **IPv6**. Keep `KITE_FORCE_IPV4=true` and whitelist the Elastic IPv4. See [CLOUD.md](../deploy/CLOUD.md).
 
 ## CLI helpers
 
@@ -126,6 +128,7 @@ uv run nse-alert order buy RELIANCE --qty 1 --live
 uv run nse-alert size RELIANCE
 uv run nse-alert pending
 uv run nse-alert confirm ABC123
+uv run nse-alert public-ip
 uv run nse-alert telegram-chats
 ```
 
