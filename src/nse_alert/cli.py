@@ -9,6 +9,7 @@ import click
 
 from nse_alert.ipv4 import force_ipv4
 from nse_alert.confirm_bot import TelegramConfirmListener
+from nse_alert.config import Settings
 from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.feed import KiteFeed, MockFeed
 from nse_alert.notify import TelegramNotifier, build_notifier
