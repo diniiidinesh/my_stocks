@@ -27,6 +27,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+# httpx logs full request URLs at INFO, and the Telegram Bot API puts the
+# bot token in the URL path (.../bot<TOKEN>/sendMessage) — WARNING avoids
+# writing the token into logs that may be world-readable.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("nse_alert")
 
 

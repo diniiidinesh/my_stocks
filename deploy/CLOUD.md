@@ -91,6 +91,46 @@ cp .env.example .env
 nano .env   # fill Kite + Telegram + TRADE_* 
 ```
 
+### Add swap (required on 1 GB boxes)
+
+The recommended Lightsail plans ship **1 GB RAM and zero swap**. That is enough
+to run the watcher, but not enough to also build a Docker image or run the EOD
+screener, which loads ~490 symbols × 400 days into pandas. With no swap the
+kernel's only option under pressure is to kill something — on 2026-09-15 it
+killed `docker-compose` three times and `networkd-dispatcher` once.
+
+Do this once, before the first `docker compose build`:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+
+# persist across reboots — skipping this is the classic mistake
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# prefer RAM; use swap only under real pressure
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf
+sudo sysctl -q vm.swappiness=10
+```
+
+Verify — `Swap:` must be non-zero, and the `fstab` line must be present:
+
+```bash
+free -m
+swapon --show
+grep swapfile /etc/fstab
+```
+
+Swap is **insurance, not capacity**: it lets short spikes page out cold memory
+instead of triggering the OOM killer. It costs nothing — the disk is already
+part of the instance plan.
+
+> A `/swapfile` that exists but shows `Swap: 0` was created without the
+> `/etc/fstab` line and disappeared at the last reboot. Re-run `swapon` and add
+> the line.
+
 ### `.env` for cloud (example)
 
 ```env
@@ -208,6 +248,58 @@ Stop:
 docker compose down
 ```
 
+## Daily runbook (trading day)
+
+Run this on the VM before the 09:15 IST open. The whole thing is one SSH
+session; close the tab when done — the container keeps running detached.
+
+```bash
+cd /opt/nse-alert
+
+git pull origin main          # optional — only when you want updates
+
+# 1. refresh the daily Kite token (expires every morning)
+docker compose run --rm nse-alert nse-alert set-token <ACCESS_TOKEN>
+
+# 2. (re)start the watcher — idempotent, never creates a second one
+docker compose up -d --force-recreate
+
+# 3. verify before you walk away
+docker compose ps
+docker compose logs --tail 30
+```
+
+The startup banner is the check that matters. Confirm `trade=` is the mode you
+intend and `feed=kite`:
+
+```
+Watching 518 symbols | thresholds=±4,7,11,13% | … | feed=kite | telegram=yes | trade=auto | …
+```
+
+Then confirm **exactly one watcher** is running — this must print one line:
+
+```bash
+ps -eo cmd --no-headers | grep "[.]venv/bin/python .*nse-alert watch"
+```
+
+Two lines means something else is also running (a systemd unit, a stray
+`uv run`). Stop it before trading: a second watcher silently breaks order
+confirmation. See [../docs/ORDERS.md](../docs/ORDERS.md) and
+[../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md).
+
+### Gotchas
+
+- **`docker compose up -d --force-recreate` is idempotent.** Running it twice
+  replaces the container; it does not create a second watcher. Re-run it freely.
+- **Changing `.env` does nothing until you recreate.** A running watcher never
+  re-reads `.env`, so a `TRADE_MODE` edit needs step 2 again. The banner in step
+  3 is how you confirm the change actually took.
+- **`Conflict. The container name … is already in use`** during a recreate is
+  Docker cleaning up a renamed intermediate. Check `docker compose ps` before
+  assuming it failed — it usually succeeded.
+- **The 15:35 IST cron runs `docker compose stop`.** The watcher stays down
+  until your next morning run. That is intentional.
+
 ## Orders — modes
 
 | `TRADE_MODE` | Behavior |
@@ -271,44 +363,45 @@ See [docs/SCREENER.md](../docs/SCREENER.md) for filters, delivery %, and ranking
 - Market orders need non-zero **market protection** (`TRADE_MARKET_PROTECTION`).
 - This is not investment advice; start with `dry_run`, `TRADE_MARGIN_INR` you can afford (or `TRADE_SIZING=fixed` + tiny `TRADE_QTY`), and `confirm`.
 
-## Deployment mechanism: Docker only — do not also run systemd
+## Deployment mechanism: Docker only
 
-**Docker Compose is the one production path for the long-running watcher.**
-`deploy/nse-alert.service` (systemd) is kept only as a reference for
-non-Docker hosts and **must never run at the same time as the Docker
-container** — both hold a long-poll on the same Telegram bot token, and
-Telegram allows exactly one `getUpdates` consumer per token. A second
-poller doesn't crash; it silently 409s forever, which killed order
-confirmation for hours on 2026-09-17 with no alert. See
-[../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md) (Incident A).
+**Docker Compose is the only supported way to run the long-running watcher.**
 
-Before enabling one path, make sure the other is off:
+There is deliberately no systemd unit in this repo. `deploy/nse-alert.service`
+was removed on 2026-09-17 because having two installable supervisors is what
+caused that day's outage: systemd and Docker each ran a watcher, both held a
+long-poll on the same Telegram bot token, and **Telegram allows exactly one
+`getUpdates` consumer per token**. The second poller does not crash — it
+silently `409`s forever, which killed order confirmation for hours with no
+alert. See [../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md) (Incident A).
 
-```bash
-# Using Docker (the documented default):
-sudo systemctl disable --now nse-alert 2>/dev/null || true
-
-# Using systemd instead of Docker:
-cd /opt/nse-alert && docker compose down
-```
-
-**Verify exactly one watcher is running, always:**
+If you are upgrading a host that still has the old unit installed, remove it:
 
 ```bash
-pgrep -fa "nse-alert watch"   # must print exactly one line
-```
-
-If you do need the systemd path (no Docker on the host):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-cd /opt/nse-alert && uv sync
-sudo cp deploy/nse-alert.service /etc/systemd/system/
+sudo systemctl disable --now nse-alert
+sudo rm -f /etc/systemd/system/nse-alert.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now nse-alert
 ```
+
+**Verify exactly one watcher is running — do this every trading day:**
+
+```bash
+ps -eo cmd --no-headers | grep "[.]venv/bin/python .*nse-alert watch"
+```
+
+Exactly one line. Note that `pgrep -f "nse-alert watch"` is unreliable here —
+it matches its own command line and over-counts.
+
+> Running on a host without Docker is not supported. `uv run nse-alert watch`
+> is for local testing only: it is not supervised, does not restart, and will
+> conflict with the container if both are up.
 
 Also note: the watcher does not reload `.env` on change. After editing
-`TRADE_MODE` or any other setting, restart whichever watcher is running
-(`docker compose restart nse-alert` or `sudo systemctl restart nse-alert`) —
-otherwise the process keeps running on stale config indefinitely.
+`TRADE_MODE` or any other setting, recreate the container
+(`docker compose up -d --force-recreate`) — otherwise the process keeps running
+on stale config indefinitely. Confirm the change took effect by checking the
+`trade=` value in the startup banner:
+
+```bash
+docker compose logs nse-alert | grep -m1 "Watching"
+```
