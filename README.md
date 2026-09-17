@@ -25,6 +25,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/TESTING_ORDERS.md](docs/TESTING_ORDERS.md)** | Order test cases + live handoff checklist |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Code layout and data flow |
 | **[docs/UPKEEP.md](docs/UPKEEP.md)** | How to keep docs accurate when code changes |
+| **[docs/BACKLOG.md](docs/BACKLOG.md)** | Parked feature ideas (pick-up notes) |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | How to read, change, and test this repo |
 | **[deploy/CLOUD.md](deploy/CLOUD.md)** | VM install (Lightsail / Oracle / EC2) |
 | **[deploy/COST.md](deploy/COST.md)** | Free tiers, intro credits, which VM to pick |

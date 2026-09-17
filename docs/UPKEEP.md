@@ -16,6 +16,7 @@ Use this checklist whenever you change behaviour users (or future-you) need to k
 | Provider cost / free tier advice | [../deploy/COST.md](../deploy/COST.md) |
 | New module or CLI command | [ARCHITECTURE.md](ARCHITECTURE.md), [../README.md](../README.md) CLI section, [README.md](README.md) index if new doc |
 | New top-level doc file | Add a row to [README.md](README.md) (this folder’s index) **and** [../README.md](../README.md) doc map |
+| Park a designed-but-unbuilt feature | Add/update an item in [BACKLOG.md](BACKLOG.md); when shipped, mark done or remove and move detail into the feature doc |
 
 ## How to write here
 

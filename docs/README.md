@@ -18,6 +18,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | See where code lives | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Change code safely | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Update docs after a code change | [UPKEEP.md](UPKEEP.md) |
+| See parked feature ideas | [BACKLOG.md](BACKLOG.md) |
 
 ## Doc ownership (what belongs where)
 
@@ -25,6 +26,7 @@ How to **find**, **read**, and **update** docs in this repository.
 |----------|---------|
 | `README.md` | Short product overview + links only — no long procedures |
 | `docs/*.md` | Feature behaviour, operator guides, architecture |
+| `docs/BACKLOG.md` | Parked ideas with enough detail to implement later |
 | `deploy/*.md` | Cloud/VPS install, networking, cost comparison |
 | `.env.example` | Canonical list of env vars (with comments) |
 | `CONTRIBUTING.md` | Dev workflow, tests, PR expectations |
