@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from nse_alert.engine import Alert
 
 logger = logging.getLogger(__name__)
+
+# Same zone as EOD report gaps / screener clock.
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def format_ist_clock(dt: datetime) -> str:
+    """Format an alert time in IST (internal timestamps stay UTC)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _alert_tags(alert: Alert) -> str:
@@ -16,6 +28,20 @@ def _alert_tags(alert: Alert) -> str:
     if alert.is_asm:
         tags.append("ASM")
     return " · ".join(tags)
+
+
+def _format_telegram_alert(alert: Alert) -> str:
+    arrow = "▲" if alert.direction == "UP" else "▼"
+    tags = _alert_tags(alert)
+    tag_line = f"\nTags: *{tags}*" if tags else ""
+    return (
+        f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
+        f"(crossed ±{alert.threshold_pct:g}%)\n"
+        f"LTP: `{alert.ltp:.2f}` | Prev close: `{alert.prev_close:.2f}`\n"
+        f"Direction: {alert.direction}"
+        f"{tag_line}\n"
+        f"Time (IST): {format_ist_clock(alert.fired_at)}"
+    )
 
 
 class Notifier(Protocol):
@@ -42,18 +68,7 @@ class TelegramNotifier:
         self._url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
     def send(self, alert: Alert) -> None:
-        arrow = "▲" if alert.direction == "UP" else "▼"
-        tags = _alert_tags(alert)
-        tag_line = f"\nTags: *{tags}*" if tags else ""
-        text = (
-            f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
-            f"(crossed ±{alert.threshold_pct:g}%)\n"
-            f"LTP: `{alert.ltp:.2f}` | Prev close: `{alert.prev_close:.2f}`\n"
-            f"Direction: {alert.direction}"
-            f"{tag_line}\n"
-            f"Time (UTC): {alert.fired_at.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        self.send_text(text, parse_mode="Markdown")
+        self.send_text(_format_telegram_alert(alert), parse_mode="Markdown")
 
     def send_text(self, text: str, *, parse_mode: str | None = None) -> None:
         import httpx
