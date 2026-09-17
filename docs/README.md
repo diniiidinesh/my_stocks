@@ -12,6 +12,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | Enable MIS test orders (sizing, SL trail) | [ORDERS.md](ORDERS.md) |
 | Fix group Telegram confirms / copy chat id | [ORDERS.md](ORDERS.md) → Telegram groups |
 | Run the EOD TA screener (Excel + Telegram) | [SCREENER.md](SCREENER.md) |
+| Backtest alert strategies on the VM (Kite history) | [RESEARCH.md](RESEARCH.md) |
 | Test auto/dry-run/confirm orders | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Pick a cloud VM / free tier | [../deploy/COST.md](../deploy/COST.md) |
 | Install on Lightsail / Oracle | [../deploy/CLOUD.md](../deploy/CLOUD.md) |
