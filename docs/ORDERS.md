@@ -114,6 +114,46 @@ uv run nse-alert telegram-chats
 Send any message in the group, re-run `telegram-chats`, copy the id into `.env`, restart `watch`. Confirm commands are accepted from the group even if `TELEGRAM_CHAT_ID` is still your DM — but then results/alerts still go to the DM.
 
 4. `TRADE_MODE=confirm` and `watch` must be running; otherwise there is no listener.
+5. **Exactly one `watch` may run against a bot token.** See below — this is the
+   failure mode that is hardest to spot.
+
+### Only one watcher, ever (confirm silently dies otherwise)
+
+Telegram allows **one** `getUpdates` consumer per bot token. Start a second
+`watch` — a stray container, a systemd unit, a leftover `uv run` — and *every*
+poll fails:
+
+```
+409 Conflict: terminated by other getUpdates request;
+make sure that only one bot instance is running
+```
+
+The listener then receives **nothing**. Pending orders are never confirmed and
+expire at `TRADE_CONFIRM_TTL_MINUTES`.
+
+This is nasty because **outbound alerts keep working perfectly** — `sendMessage`
+has no such restriction. The bot can talk to you; it cannot hear you. Nothing
+looks broken from the Telegram side.
+
+On 2026-09-17 this cost four orders and produced 6,062 `409`s in one day before
+anyone noticed. Full write-up: [RCA-2026-09-17.md](RCA-2026-09-17.md).
+
+**Check before you trust a confirm run:**
+
+```bash
+# on the VM — must print exactly one line
+ps -eo cmd --no-headers | grep "[.]venv/bin/python .*nse-alert watch"
+
+# and the listener must not be 409-ing
+docker compose logs --tail 50 nse-alert | grep "409 Conflict"   # expect nothing
+```
+
+If a systemd unit is also installed, `sudo systemctl disable --now nse-alert`.
+Pick one mechanism — see [../deploy/CLOUD.md](../deploy/CLOUD.md).
+
+> `auto` mode starts **no** confirm listener, so it never shows a 409. A clean
+> log in `auto` does not mean a second watcher is absent — check the process
+> count instead.
 
 Fallback: `uv run nse-alert confirm ABC123` on the VM (same dir as `watch`). If you see **No pending order**, run `nse-alert pending` — it prints the `orders.json` path. Docker watch and host `uv run` must share `./.nse_alert`.
 

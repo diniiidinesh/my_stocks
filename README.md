@@ -26,6 +26,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Code layout and data flow |
 | **[docs/UPKEEP.md](docs/UPKEEP.md)** | How to keep docs accurate when code changes |
 | **[docs/RCA-2026-09-17.md](docs/RCA-2026-09-17.md)** | 2026-09-17 outage RCA — read before touching deployment or the confirm listener |
+| **[FIX_PLAN.md](FIX_PLAN.md)** | Transient remediation tracker from the 2026-09-17 RCA (P4 still open) |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | How to read, change, and test this repo |
 | **[deploy/CLOUD.md](deploy/CLOUD.md)** | VM install (Lightsail / Oracle / EC2) |
 | **[deploy/COST.md](deploy/COST.md)** | Free tiers, intro credits, which VM to pick |

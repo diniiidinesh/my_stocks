@@ -1,5 +1,24 @@
 # Fix plan — nse-alert (handoff)
 
+> **Status as of 2026-09-17 23:10 IST.** P0–P4 are **done**.
+> This file is a point-in-time handoff. The durable write-up — including the
+> prevention controls that are still unbuilt — is
+> [`docs/RCA-2026-09-17.md`](docs/RCA-2026-09-17.md).
+>
+> | Item | Status |
+> |------|--------|
+> | P0 — missing `Settings` import | **Done** — PR #17, merged |
+> | P1 — container as `ubuntu` | **Done** — PR #18, merged; verified live |
+> | P2 — cron PATH + UTC docs | **Done** — PR #18, merged |
+> | P3 — VM drift | **Done** — VM pulled to `a78cc67`, image rebuilt |
+> | P4 — bot token in logs | **Done** — `httpx` quieted to WARNING; VM log truncated + chmod 640 |
+>
+> `deploy/nse-alert.service` has been **deleted** and Docker is now documented
+> as the only production path.
+>
+> Still unbuilt, tracked in the RCA's Actions section: single-instance lock,
+> alert on repeated `getUpdates` failure, and order-expiry notification.
+
 Context: the 20:30 IST screener never delivered. Root-caused on 2026-09-17.
 Cron timing was always correct (`0 15` UTC = 20:30 IST); the command failed.
 Two live issues were hotfixed directly on the VM and must now be made durable

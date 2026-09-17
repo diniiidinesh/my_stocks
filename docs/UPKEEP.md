@@ -16,6 +16,10 @@ Use this checklist whenever you change behaviour users (or future-you) need to k
 | Provider cost / free tier advice | [../deploy/COST.md](../deploy/COST.md) |
 | New module or CLI command | [ARCHITECTURE.md](ARCHITECTURE.md), [../README.md](../README.md) CLI section, [README.md](README.md) index if new doc |
 | New top-level doc file | Add a row to [README.md](README.md) (this folder’s index) **and** [../README.md](../README.md) doc map |
+| Deployment mechanism / supervisor (Docker, systemd, cron) | [../deploy/CLOUD.md](../deploy/CLOUD.md) **and** [ARCHITECTURE.md](ARCHITECTURE.md) deploy table. Only **one** mechanism may be documented as production — say so explicitly |
+| Cron schedule | [../deploy/CLOUD.md](../deploy/CLOUD.md) + [SCREENER.md](SCREENER.md). The VM runs **UTC**: annotate every entry with both UTC and IST, and keep the examples identical to the live crontab |
+| Host/VM requirement (RAM, swap, disk, packages) | [../deploy/CLOUD.md](../deploy/CLOUD.md) install section + [../deploy/COST.md](../deploy/COST.md) if it changes which plan to pick |
+| A production incident | Write `RCA-YYYY-MM-DD.md` in this folder, link it from **both** indexes, and add the specific lesson to the page an operator actually reads (e.g. a confirm-flow failure belongs in [ORDERS.md](ORDERS.md), not only in the RCA) |
 
 ## How to write here
 
