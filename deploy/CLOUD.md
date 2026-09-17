@@ -78,6 +78,8 @@ AWS does **not** ship a managed policy named `LightsailFullAccess`. Searching �
 
 Sign in as **root** (incognito). Then use **either** path A (no JSON) or path B (paste JSON). Both are done in **IAM**, not in the Lightsail console.
 
+The **Add permissions** wizard opens on **Add user to group**. That is the wrong card for this. Click the third option, **Attach policies directly**, then **Next**. Do not click **Next** while **Add user to group** is selected, and ignore **Create group** for now.
+
 **A — visual editor (easiest)**
 
 1. Open [IAM → Policies](https://console.aws.amazon.com/iam/home#/policies) → **Create policy**.
@@ -87,14 +89,14 @@ Sign in as **root** (incognito). Then use **either** path A (no JSON) or path B 
 5. **Resources** → **All**.
 6. **Next** → Policy name `LightsailFullAccessPolicy` → **Create policy**.
 7. Open [IAM → Users](https://console.aws.amazon.com/iam/home#/users) → **`nse-alert-ops`** → **Permissions** tab.
-8. **Add permissions** → **Add permissions** → **Attach policies directly**.
+8. **Add permissions**. On the three-card screen, click **Attach policies directly** (right-hand card) → **Next**. Leave **Add user to group** unselected.
 9. Search `LightsailFullAccessPolicy` → tick it → **Next** → **Add permissions**.
 10. Confirm the **Permissions** tab now lists `LightsailFullAccessPolicy`.
 
 **B — inline JSON on the user (one screen)**
 
 1. [IAM → Users](https://console.aws.amazon.com/iam/home#/users) → **`nse-alert-ops`** → **Permissions**.
-2. **Add permissions** dropdown (right side) → **Create inline policy** (not “Attach policies directly”).
+2. If you landed on the three-card **Add permissions** page, click **Cancel**. Back on the user **Permissions** tab, open the **Add permissions** dropdown on the right → **Create inline policy** (not the three-card wizard).
 3. Choose **JSON**. Delete the sample and paste:
 
 ```json
