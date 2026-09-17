@@ -3,6 +3,9 @@ services:
     build: .
     container_name: nse-alert
     restart: unless-stopped
+    # Match the host `ubuntu` user (uid/gid 1000 on the Lightsail VM) so the
+    # container and host-side cron both write .nse_alert/ as the same owner.
+    user: "${UID:-1000}:${GID:-1000}"
     env_file:
       - .env
     environment:
