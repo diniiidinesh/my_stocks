@@ -72,25 +72,71 @@ Root working only in **incognito** is usually the **browser**, not AWS randomly 
 
 You cannot create the IAM user from this repo. Do it once in the AWS console while root still works (incognito is fine). After that, bookmark the **IAM** sign-in URL and stop opening the root form.
 
+AWS does **not** ship a managed policy named `LightsailFullAccess`. Searching “Lightsail” on the user-creation **Permissions** step finds nothing. You create that policy yourself (or paste it as an **inline** policy on the user). Without it, `nse-alert-ops` can sign in but Lightsail looks empty — the instance is still there; the user is not allowed to list it.
+
+### If `nse-alert-ops` already exists (attach Lightsail now)
+
+Sign in as **root** (incognito). Then use **either** path A (no JSON) or path B (paste JSON). Both are done in **IAM**, not in the Lightsail console.
+
+**A — visual editor (easiest)**
+
+1. Open [IAM → Policies](https://console.aws.amazon.com/iam/home#/policies) → **Create policy**.
+2. Stay on **Visual**.
+3. **Select a service** → type `Lightsail` → choose **Lightsail**.
+4. **Actions allowed** → tick **All Lightsail actions** (the Lightsail console needs full Lightsail access; a smaller set shows a blank instance list).
+5. **Resources** → **All**.
+6. **Next** → Policy name `LightsailFullAccessPolicy` → **Create policy**.
+7. Open [IAM → Users](https://console.aws.amazon.com/iam/home#/users) → **`nse-alert-ops`** → **Permissions** tab.
+8. **Add permissions** → **Add permissions** → **Attach policies directly**.
+9. Search `LightsailFullAccessPolicy` → tick it → **Next** → **Add permissions**.
+10. Confirm the **Permissions** tab now lists `LightsailFullAccessPolicy`.
+
+**B — inline JSON on the user (one screen)**
+
+1. [IAM → Users](https://console.aws.amazon.com/iam/home#/users) → **`nse-alert-ops`** → **Permissions**.
+2. **Add permissions** dropdown (right side) → **Create inline policy** (not “Attach policies directly”).
+3. Choose **JSON**. Delete the sample and paste:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "lightsail:*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+4. **Next** → name `LightsailFullAccess` → **Create policy**.
+
+Sign out of root. Sign in again as `nse-alert-ops`. Open [Lightsail instances](https://lightsail.aws.amazon.com/ls/webapp/home/instances) and set the region (top-right) to **Mumbai (ap-south-1)**. Lightsail is regional: Virginia / Singapore will look empty even with the policy. The AWS console **home** page also does not list Lightsail VMs — use that Lightsail URL, not EC2.
+
+If it is still empty: on the IAM user **Permissions** tab (as root) there should be at least one policy containing `lightsail:*`. If the only attached policy is `IAMUserChangePassword` or nothing, the attach did not stick — repeat A or B.
+
+Full paste files (Lightsail + optional IAM self-manage, or EC2): [iam/nse-alert-ops-lightsail.json](iam/nse-alert-ops-lightsail.json) · [iam/nse-alert-ops-ec2.json](iam/nse-alert-ops-ec2.json). Do **not** attach `AdministratorAccess`.
+
 ### Create the IAM user (click path)
+
+Skip this if `nse-alert-ops` already exists; use the attach steps above.
 
 Do this as **root**, in **incognito**, on [https://console.aws.amazon.com/](https://console.aws.amazon.com/). Sign in with the **root email**, not “IAM user”.
 
 1. Top-right → copy the **Account ID** (12 digits). You need it to sign in later.
 2. Optional but nicer: **IAM → Dashboard → Create account alias** (e.g. `nse-alert`). Then the sign-in URL is `https://nse-alert.signin.aws.amazon.com/console` instead of the numeric account id.
-3. **IAM → Users → Create user**.
+3. **Create the Lightsail policy first** (path A or B above) so it exists before the user wizard. There is nothing useful to search for on the wizard’s policy list until you do this.
+4. **IAM → Users → Create user**.
    - User name: `nse-alert-ops`
    - Tick **Provide user access to the AWS Management Console**
    - **I want to create an IAM user** (not Identity Center, unless you already use it)
    - Autogenerate a password **or** set one; tick **Users must create a new password at next sign-in**
    - Do **not** create access keys. Console-only is enough for Lightsail/EC2. Access keys are for CLI/API and are a common leak.
-4. **Permissions** → **Attach policies directly** → **Create policy** → JSON tab. Paste the matching file from this repo, then Next → name it `nse-alert-ops` → Create policy. Go back to the user wizard, refresh the policy list, attach `nse-alert-ops`.
-   - Lightsail VM (recommended): [iam/nse-alert-ops-lightsail.json](iam/nse-alert-ops-lightsail.json)
-   - EC2 + Elastic IP: [iam/nse-alert-ops-ec2.json](iam/nse-alert-ops-ec2.json)
-   - Do **not** attach `AdministratorAccess`.
-5. Create the user. Save the **console sign-in URL**, username, and one-time password in your password manager.
-6. Still as root: open `nse-alert-ops` → **Security credentials** → **Assign MFA device** → **Authenticator app** (Google Authenticator / Authy). Scan the QR, enter two successive codes. Also enable **MFA on the root user** on the same page for the root account (IAM dashboard → **Add MFA** under root) if it is not already on.
-7. **Sign out** of root. Do not leave root logged in on a daily browser profile.
+5. **Permissions** → **Attach policies directly** → search `LightsailFullAccessPolicy` → tick it. Do **not** attach `AdministratorAccess`.
+6. Create the user. Save the **console sign-in URL**, username, and one-time password in your password manager.
+7. Still as root: open `nse-alert-ops` → **Security credentials** → **Assign MFA device** → **Authenticator app** (Google Authenticator / Authy). Scan the QR, enter two successive codes. Also enable **MFA on the root user** (IAM dashboard → **Add MFA** under root) if it is not already on.
+8. **Sign out** of root. Do not leave root logged in on a daily browser profile.
 
 ### Sign in as the IAM user (daily)
 
@@ -103,7 +149,7 @@ https://ACCOUNT_ID.signin.aws.amazon.com/console
 (or `https://YOUR-ALIAS.signin.aws.amazon.com/console` if you set an alias)
 
 - **Account ID** (or alias) + **IAM user name** `nse-alert-ops` + password + MFA
-- Then open **Lightsail** (Mumbai) or **EC2** as usual — browser SSH, static IP, firewall, start/stop
+- Then open [Lightsail instances](https://lightsail.aws.amazon.com/ls/webapp/home/instances), region **Mumbai (ap-south-1)** — browser SSH, static IP, firewall, start/stop. Do not use the EC2 instance list; Lightsail VMs are not shown there.
 
 If the page still asks for an **email**, you are on the root form. Switch via “Sign in using a different account” / “IAM user”.
 
@@ -112,7 +158,7 @@ Keep root in the password manager + MFA. Use it only for: billing/payment method
 ### After first IAM login
 
 1. Change the one-time password when prompted.
-2. Confirm **Lightsail → Instances** still shows `nse-alert` (same account; IAM does not create a second AWS account).
+2. Confirm [Lightsail → Instances](https://lightsail.aws.amazon.com/ls/webapp/home/instances) in **Mumbai** still shows `nse-alert` (same account; IAM does not create a second AWS account). If the list is empty, the Lightsail policy is not attached yet — go back to **If nse-alert-ops already exists**.
 3. Bookmark the IAM sign-in URL. Forget the root bookmark for daily use.
 
 If you later need AWS CLI on a laptop: create **one** access key on `nse-alert-ops`, store it in `~/.aws/credentials`, never in git or `.env`. The Lightsail/EC2 policies above already cover that CLI. Delete the key if you stop using CLI.
