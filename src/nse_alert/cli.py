@@ -584,6 +584,61 @@ def order_cmd(side: str, symbol: str, qty: int | None, dry_run: bool) -> None:
         raise SystemExit(1)
 
 
+@main.command("size")
+@click.argument("symbol")
+@click.option("--price", type=float, default=None, help="Override LTP (skip Kite quote)")
+def size_cmd(symbol: str, price: float | None) -> None:
+    """Print how many shares TRADE_MARGIN_INR would buy (no order placed).
+
+    Paste this output when qty comes out as 1 — it shows whether Kite margin
+    per share already consumes the ₹10k budget (not TRADE_QTY).
+    """
+    settings = Settings()
+    book = OrderBook(settings.state_dir / "orders.json")
+    executor = _build_executor(settings, book)
+    sym = symbol.upper()
+    click.echo(
+        f"TRADE_SIZING={executor.sizing_mode}  TRADE_MARGIN_INR={executor.margin_budget_inr:g}  "
+        f"TRADE_QTY={executor.default_qty}  product={executor.product}  "
+        f"fallback_lev={executor.fallback_leverage:g}x"
+    )
+    px = float(price) if price is not None else _quote_ltp(settings, sym)
+    if px <= 0:
+        raise click.ClickException(
+            "No LTP. Pass --price 1234.5 or run `nse-alert login` first."
+        )
+    click.echo(f"LTP used={px:.2f}")
+    raw_row: dict[str, object] | None = None
+    if settings.kite_api_key and settings.kite_access_token:
+        try:
+            _total, _lev, raw_row = executor._margin_for_quantity(  # noqa: SLF001
+                symbol=sym, side="BUY", quantity=1, price=px
+            )
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"order_margins failed: {exc}")
+    if raw_row is not None:
+        click.echo(
+            "Kite order_margins row: "
+            f"total={raw_row.get('total')}  leverage={raw_row.get('leverage')}  "
+            f"var={raw_row.get('var')}  span={raw_row.get('span')}  "
+            f"exposure={raw_row.get('exposure')}"
+        )
+        if executor.sizing_mode == "margin":
+            try:
+                m1 = float(raw_row.get("total") or 0)
+                if m1 > 0:
+                    click.echo(
+                        f"formula: floor({executor.margin_budget_inr:g} / {m1:g}) = "
+                        f"{int(executor.margin_budget_inr // m1)} "
+                        f"(qty is 1 whenever margin/share > budget/2)"
+                    )
+            except (TypeError, ValueError):
+                pass
+    qty, note = executor.size_quantity(symbol=sym, price=px, side="BUY")
+    click.echo(f"qty={qty}")
+    click.echo(f"note={note}")
+
+
 @main.command("pending")
 def pending_cmd() -> None:
     """List orders waiting for Telegram/CLI confirmation."""

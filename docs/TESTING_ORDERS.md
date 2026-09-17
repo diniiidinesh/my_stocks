@@ -46,6 +46,7 @@ uv run pytest -q tests/test_orders.py tests/test_engine.py tests/test_report.py
 | TC-CONFIRM-03 | Telegram CONFIRM/CANCEL regex | Parses ids; `/confirm@Bot`; ignores junk | `test_tc_confirm_telegram_regex` |
 | TC-CONFIRM-04 | Group confirm vs DM chat id | Command from group is accepted | `test_tc_confirm_group_message_accepted_even_if_chat_id_differs` |
 | TC-SIZE-03 | CLI `order` without `--qty` | Margin size, not TRADE_QTY=1 | `test_cli_order_without_qty_uses_margin_not_trade_qty` |
+| TC-SIZE-04 | High margin/share with `TRADE_SIZING=margin` | qty=1 is calculated, note explains | `test_tc_margin_sizing_qty_one_when_margin_per_share_high` |
 | TC-BOOK-01 | New calendar day | `placed_count` resets | `test_tc_book_resets_on_new_calendar_day` |
 | TC-REPORT-01 | EOD close % + hold counts | Close section + held/fired | `tests/test_report.py` |
 

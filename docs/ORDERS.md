@@ -46,15 +46,30 @@ Example: ₹10,000 budget, stock needs ₹2,000 margin/share at its MIS leverage
 - Offline dry_run: `qty ≈ floor(TRADE_MARGIN_INR × TRADE_FALLBACK_LEVERAGE / price)`  
 - `TRADE_SIZING=fixed`: always `TRADE_QTY`
 
-**Do not comment out `TRADE_QTY=1` hoping to unlock ₹10k size.** That variable is ignored when `TRADE_SIZING=margin` (the default). If a live/confirm order still shows **1 share**, check:
+**Do not comment out `TRADE_QTY=1` hoping to unlock ₹10k size.** That variable is ignored when `TRADE_SIZING=margin` (the default). **`TRADE_SIZING=margin` can still place 1 share** — that is the calculated result when Kite’s margin for **1 share** is already most of `TRADE_MARGIN_INR`:
 
-1. `.env` has `TRADE_SIZING=margin` and `TRADE_MARGIN_INR=10000` (then **rebuild/restart** `watch`).
-2. Watch logs: `sizing=margin budget=₹10000 | TRADE_QTY=1 unused`.
-3. Confirm / dry-run Telegram line `Sizing: …` — it states why qty is what it is.
-4. Expensive names can correctly size to **1** if one share’s MIS margin is already ≥ ₹10k.
-5. `nse-alert order … --qty 1` is an explicit override; omit `--qty` to use margin sizing (needs a Kite token so LTP can be fetched).
+```text
+qty = max(1, floor(10000 / margin_per_share))
+```
 
-Confirm Telegram messages include the sizing note (qty, ₹/share, leverage, notional).
+So qty=1 whenever `margin_per_share > 5000` (e.g. a ₹8,000 name with **1x** / 100% margin, ASM, or a very expensive stock). That is **not** `TRADE_QTY`.
+
+Diagnose on the VM (needs today’s token):
+
+```bash
+uv run nse-alert size SYMBOL
+# or: uv run nse-alert size SYMBOL --price 1234.5
+```
+
+If a live/confirm order still looks wrong, paste:
+
+1. The Telegram **`Sizing:`** line (or `size` command `note=` line)
+2. `nse-alert size SYMBOL` full output
+3. Symbol + LTP
+4. Watch log line `sizing=margin budget=₹…` from process start
+5. Optional: `.nse_alert/orders.json` `quantity` + `reason` (redact tokens)
+
+Confirm Telegram messages include the sizing note (qty, ₹/share, leverage, notional). When qty is 1 because margin/share is large, the note now says so explicitly.
 
 ### Why MIS?
 
@@ -108,6 +123,7 @@ Fallback: `uv run nse-alert confirm ABC123` on the VM.
 uv run nse-alert order buy RELIANCE --dry-run          # margin-sized (needs token)
 uv run nse-alert order buy RELIANCE --qty 1 --dry-run  # explicit 1 share
 uv run nse-alert order buy RELIANCE --qty 1 --live
+uv run nse-alert size RELIANCE
 uv run nse-alert pending
 uv run nse-alert confirm ABC123
 uv run nse-alert telegram-chats

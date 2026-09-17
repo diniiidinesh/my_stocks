@@ -8,7 +8,7 @@ import pytest
 
 from nse_alert.confirm_bot import _CANCEL_RE, _CONFIRM_RE
 from nse_alert.engine import Alert, AlertEngine
-from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest, round_tick
+from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest, parse_order_margins_payload, round_tick
 
 
 # ---------------------------------------------------------------------------
@@ -593,6 +593,44 @@ def test_tc_margin_sizing_uses_order_margins(
     assert req.quantity == 5
     assert "margin≈₹10000" in req.reason
     assert "5 shares" in req.reason
+
+
+def test_parse_order_margins_payload_shapes() -> None:
+    row = {"total": 400.0, "leverage": 5.0, "var": 400.0}
+    assert parse_order_margins_payload([row])["total"] == 400.0
+    assert parse_order_margins_payload({"orders": [row]})["total"] == 400.0
+    assert parse_order_margins_payload({"data": [row]})["total"] == 400.0
+    with pytest.raises(RuntimeError, match="empty"):
+        parse_order_margins_payload([])
+    with pytest.raises(RuntimeError, match="InputException"):
+        parse_order_margins_payload(
+            [{"error_type": "InputException", "message": "InputException: bad"}]
+        )
+
+
+def test_tc_margin_sizing_qty_one_when_margin_per_share_high(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """TRADE_SIZING=margin still yields 1 share if 1 share already needs ~₹10k."""
+
+    class _Pricey(_FakeKite):
+        def order_margins(self, params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [{"total": 8500.0, "leverage": 1.0, "var": 8500.0}]
+
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        sizing_mode="margin",
+        margin_budget_inr=10_000,
+        default_qty=1,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: _Pricey())
+    qty, note = ex.size_quantity(symbol="PAGEIND", price=8500.0, side="BUY")
+    assert qty == 1
+    assert "qty=1 because Kite margin/share" in note
+    assert "TRADE_QTY" in note
 
 
 def test_tc_margin_sizing_fallback_leverage(tmp_path: Path) -> None:

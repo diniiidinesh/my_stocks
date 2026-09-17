@@ -15,6 +15,34 @@ logger = logging.getLogger(__name__)
 NSE_TICK = 0.05
 _TERMINAL_ORDER_STATUSES = frozenset({"COMPLETE", "CANCELLED", "REJECTED"})
 
+
+def parse_order_margins_payload(detail: Any) -> dict[str, Any]:
+    """Unwrap Kite ``order_margins`` into a single order row.
+
+    The Python client normally returns a list of rows. Some responses (or
+    wrappers) are a dict with ``orders`` / ``data``. A missing ``total``
+    must not be treated as 0 silently — that would size every name to 1 share.
+    """
+    if isinstance(detail, list):
+        if not detail:
+            raise RuntimeError("order_margins returned an empty list")
+        row = detail[0]
+    elif isinstance(detail, dict):
+        orders = detail.get("orders")
+        if isinstance(orders, list) and orders:
+            row = orders[0]
+        elif "data" in detail and detail.get("data") is not detail:
+            return parse_order_margins_payload(detail["data"])
+        else:
+            row = detail
+    else:
+        raise RuntimeError(f"Unexpected order_margins response: {detail!r}")
+    if not isinstance(row, dict):
+        raise RuntimeError(f"Unexpected order_margins row: {row!r}")
+    if row.get("error_type") or str(row.get("status") or "").lower() == "error":
+        raise RuntimeError(str(row.get("message") or row))
+    return row
+
 TradeMode = Literal["off", "dry_run", "confirm", "auto"]
 TransactionSide = Literal["BUY", "SELL"]
 
@@ -329,8 +357,8 @@ class OrderExecutor:
         side: TransactionSide,
         quantity: int,
         price: float | None = None,
-    ) -> tuple[float, float]:
-        """Return (required_margin_inr, leverage) for one MIS order via Kite."""
+    ) -> tuple[float, float, dict[str, Any]]:
+        """Return (required_margin_inr, leverage, raw_row) for one MIS order via Kite."""
         kite = self._kite()
         params: dict[str, Any] = {
             "exchange": kite.EXCHANGE_NSE,
@@ -347,12 +375,10 @@ class OrderExecutor:
             # Helps margin calc for MARKET outside hours in some cases
             params["price"] = float(price)
         detail = kite.order_margins([params])
-        row = detail[0] if isinstance(detail, list) and detail else detail
-        if not isinstance(row, dict):
-            raise RuntimeError(f"Unexpected order_margins response: {detail!r}")
+        row = parse_order_margins_payload(detail)
         total = float(row.get("total") or 0.0)
         leverage = float(row.get("leverage") or 0.0)
-        return total, leverage
+        return total, leverage, row
 
     def size_quantity(
         self,
@@ -384,7 +410,7 @@ class OrderExecutor:
         px = max(float(price), NSE_TICK)
 
         try:
-            margin_1, leverage = self._margin_for_quantity(
+            margin_1, leverage, raw = self._margin_for_quantity(
                 symbol=symbol, side=side, quantity=1, price=px
             )
             if margin_1 <= 0:
@@ -394,9 +420,24 @@ class OrderExecutor:
             eff_lev = (notional / (qty * margin_1)) if margin_1 > 0 else leverage
             if leverage <= 0:
                 leverage = eff_lev
+            one_share_note = ""
+            if qty == 1 and margin_1 > budget / 2:
+                one_share_note = (
+                    f"; qty=1 because Kite margin/share ₹{margin_1:.0f} "
+                    f"uses most of budget ₹{budget:.0f} (not TRADE_QTY)"
+                )
             note = (
                 f"margin≈₹{budget:.0f} → {qty} shares @≈{px:.2f} "
                 f"(~₹{margin_1:.0f}/sh, lev≈{leverage:.2f}x, notional≈₹{notional:.0f})"
+                f"{one_share_note}"
+            )
+            logger.info(
+                "order_margins %s total=%s leverage=%s var=%s extra=%s",
+                symbol,
+                raw.get("total"),
+                raw.get("leverage"),
+                raw.get("var"),
+                {k: raw.get(k) for k in ("span", "exposure", "additional") if k in raw},
             )
             return qty, note
         except Exception as exc:  # noqa: BLE001
