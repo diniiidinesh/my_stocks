@@ -1,0 +1,58 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Ec2Describe",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:GetConsoleOutput",
+        "ec2:GetConsoleScreenshot"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "Ec2InstanceLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:RebootInstances"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ElasticIpAndSecurityGroups",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AllocateAddress",
+        "ec2:AssociateAddress",
+        "ec2:DisassociateAddress",
+        "ec2:ReleaseAddress",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:CreateTags"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SelfManagePasswordAndMfa",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ChangePassword",
+        "iam:GetAccountPasswordPolicy",
+        "iam:GetUser",
+        "iam:ListMFADevices",
+        "iam:ListVirtualMFADevices",
+        "iam:CreateVirtualMFADevice",
+        "iam:DeleteVirtualMFADevice",
+        "iam:EnableMFADevice",
+        "iam:ResyncMFADevice",
+        "iam:DeactivateMFADevice"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

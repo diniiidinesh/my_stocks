@@ -66,18 +66,56 @@ Optional: make the IP sticky via **Networking → IP Management → Reserved pub
 
 ## AWS console login (root vs IAM)
 
-Use an **IAM user** (or IAM Identity Center) for daily Lightsail/EC2 work. Do not use the **root** user except for billing, account recovery, and creating that first IAM user.
+Use an **IAM user** for daily Lightsail/EC2 work. Do **not** use the **root** user except for billing, account recovery, and creating that first IAM user.
 
 Root working only in **incognito** is usually the **browser**, not AWS randomly locking you: leftover `aws.amazon.com` cookies, a password-manager fill, or an extension. Clearing site cookies for Amazon/AWS in the normal profile often fixes it. It is common enough to be annoying; it is not a reason to keep using root.
 
-Create:
+You cannot create the IAM user from this repo. Do it once in the AWS console while root still works (incognito is fine). After that, bookmark the **IAM** sign-in URL and stop opening the root form.
 
-1. IAM → **Users** → Create user (e.g. `nse-alert-ops`).
-2. Attach a tight policy (Lightsail **or** EC2 + Elastic IP + the instance SG — not `AdministratorAccess`).
-3. Enable **MFA** on that user **and** on root.
-4. Sign in at the **account IAM sign-in URL** (Account ID + IAM user), not the root email form.
+### Create the IAM user (click path)
 
-Keep root in a password manager + MFA; use it rarely.
+Do this as **root**, in **incognito**, on [https://console.aws.amazon.com/](https://console.aws.amazon.com/). Sign in with the **root email**, not “IAM user”.
+
+1. Top-right → copy the **Account ID** (12 digits). You need it to sign in later.
+2. Optional but nicer: **IAM → Dashboard → Create account alias** (e.g. `nse-alert`). Then the sign-in URL is `https://nse-alert.signin.aws.amazon.com/console` instead of the numeric account id.
+3. **IAM → Users → Create user**.
+   - User name: `nse-alert-ops`
+   - Tick **Provide user access to the AWS Management Console**
+   - **I want to create an IAM user** (not Identity Center, unless you already use it)
+   - Autogenerate a password **or** set one; tick **Users must create a new password at next sign-in**
+   - Do **not** create access keys. Console-only is enough for Lightsail/EC2. Access keys are for CLI/API and are a common leak.
+4. **Permissions** → **Attach policies directly** → **Create policy** → JSON tab. Paste the matching file from this repo, then Next → name it `nse-alert-ops` → Create policy. Go back to the user wizard, refresh the policy list, attach `nse-alert-ops`.
+   - Lightsail VM (recommended): [iam/nse-alert-ops-lightsail.json](iam/nse-alert-ops-lightsail.json)
+   - EC2 + Elastic IP: [iam/nse-alert-ops-ec2.json](iam/nse-alert-ops-ec2.json)
+   - Do **not** attach `AdministratorAccess`.
+5. Create the user. Save the **console sign-in URL**, username, and one-time password in your password manager.
+6. Still as root: open `nse-alert-ops` → **Security credentials** → **Assign MFA device** → **Authenticator app** (Google Authenticator / Authy). Scan the QR, enter two successive codes. Also enable **MFA on the root user** on the same page for the root account (IAM dashboard → **Add MFA** under root) if it is not already on.
+7. **Sign out** of root. Do not leave root logged in on a daily browser profile.
+
+### Sign in as the IAM user (daily)
+
+Use this URL, **not** the root email form:
+
+```text
+https://ACCOUNT_ID.signin.aws.amazon.com/console
+```
+
+(or `https://YOUR-ALIAS.signin.aws.amazon.com/console` if you set an alias)
+
+- **Account ID** (or alias) + **IAM user name** `nse-alert-ops` + password + MFA
+- Then open **Lightsail** (Mumbai) or **EC2** as usual — browser SSH, static IP, firewall, start/stop
+
+If the page still asks for an **email**, you are on the root form. Switch via “Sign in using a different account” / “IAM user”.
+
+Keep root in the password manager + MFA. Use it only for: billing/payment method, closing the account, or recovering this IAM user.
+
+### After first IAM login
+
+1. Change the one-time password when prompted.
+2. Confirm **Lightsail → Instances** still shows `nse-alert` (same account; IAM does not create a second AWS account).
+3. Bookmark the IAM sign-in URL. Forget the root bookmark for daily use.
+
+If you later need AWS CLI on a laptop: create **one** access key on `nse-alert-ops`, store it in `~/.aws/credentials`, never in git or `.env`. The Lightsail/EC2 policies above already cover that CLI. Delete the key if you stop using CLI.
 
 ## Install on the VM
 

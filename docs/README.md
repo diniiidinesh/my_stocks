@@ -15,6 +15,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | Test auto/dry-run/confirm orders | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Pick a cloud VM / free tier | [../deploy/COST.md](../deploy/COST.md) |
 | Install on Lightsail / Oracle | [../deploy/CLOUD.md](../deploy/CLOUD.md) |
+| AWS root login fails / create IAM user | [../deploy/CLOUD.md](../deploy/CLOUD.md) → AWS console login |
 | See where code lives | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Change code safely | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | Update docs after a code change | [UPKEEP.md](UPKEEP.md) |
