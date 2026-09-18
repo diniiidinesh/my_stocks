@@ -159,6 +159,14 @@ failures (`⚠️ Confirm listener is down — ...`), backing off instead of
 hammering a dead poll. You should never again have to notice this by counting
 409s in a log.
 
+A third guard covers the case even if the listener *is* healthy but you
+simply don't reply in time: `watch` polls for newly-expired pending orders
+(throttled to once per 30s) and sends `⏱ Order EXPIRED unconfirmed: <symbol>
+<side> <qty> @ ~₹<ltp> (id <id>, <N> min TTL)` for each one — batched into a
+single summary if more than 3 expire in the same sweep. This is the one that
+would have surfaced the 2026-09-17 incident within 30 minutes instead of at
+day's end.
+
 **Check before you trust a confirm run:**
 
 ```bash

@@ -14,7 +14,13 @@ from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.lock import acquire_single_instance, release_single_instance
 from nse_alert.feed import KiteFeed, MockFeed
 from nse_alert.notify import TelegramNotifier, build_notifier
-from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest, SizingRefusedError
+from nse_alert.orders import (
+    OrderBook,
+    OrderExecutor,
+    OrderRequest,
+    SizingRefusedError,
+    format_expiry_message,
+)
 from nse_alert.report import (
     build_day_report,
     format_day_report,
@@ -258,6 +264,29 @@ def watch_cmd(
             if tg:
                 tg.send_text(note)
 
+    EXPIRY_SWEEP_INTERVAL_SEC = 30.0
+    _last_expiry_sweep = {"t": 0.0}
+
+    def _sweep_expired_orders() -> None:
+        now = time.time()
+        if now - _last_expiry_sweep["t"] < EXPIRY_SWEEP_INTERVAL_SEC:
+            return
+        _last_expiry_sweep["t"] = now
+        newly = book.sweep_expired()
+        if not newly:
+            return
+        if len(newly) > 3:
+            messages = [
+                f"⏱ {len(newly)} orders EXPIRED unconfirmed — see "
+                "`nse-alert pending` / orders.json"
+            ]
+        else:
+            messages = [format_expiry_message(item) for item in newly]
+        for msg in messages:
+            logger.warning("%s", msg)
+            if tg:
+                tg.send_text(msg)
+
     def on_tick(symbol: str, ltp: float) -> None:
         trail_msg = executor.manage_open_stops(symbol, ltp)
         if trail_msg:
@@ -268,6 +297,8 @@ def watch_cmd(
             notifier.send(alert)
             alert_count["n"] += 1
             _handle_trade(alert)
+        if executor.mode == "confirm":
+            _sweep_expired_orders()
 
     threshold_label = ",".join(f"{t:g}" for t in thresholds)
     fo_only_label = ",".join(f"{t:g}" for t in fo_only) if fo_only else "none"

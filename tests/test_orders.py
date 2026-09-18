@@ -333,6 +333,66 @@ def test_tc_confirm_pending_expires(tmp_path: Path) -> None:
     assert book._data["pending"][pending.id]["status"] == "expired"  # noqa: SLF001
 
 
+def test_tc_sweep_expired_returns_only_newly_transitioned(tmp_path: Path) -> None:
+    """sweep_expired must report an expiry exactly once, not on every poll."""
+    from nse_alert.orders import format_expiry_message
+
+    book = OrderBook(tmp_path / "orders.json")
+    pending = book.add_pending(
+        _buy_req("ASTEC"),
+        alert_symbol="ASTEC",
+        alert_threshold=13.0,
+        alert_direction="UP",
+        entry_ltp=753.0,
+        ttl_minutes=30,
+    )
+    # Not expired yet.
+    assert book.sweep_expired() == []
+
+    # Shift the whole window into the past, preserving the 30-min TTL gap
+    # (moving only expires_at backward would corrupt the TTL the message reports).
+    created = datetime.now(timezone.utc) - timedelta(minutes=31)
+    book._data["pending"][pending.id]["created_at"] = created.isoformat()  # noqa: SLF001
+    book._data["pending"][pending.id]["expires_at"] = (  # noqa: SLF001
+        created + timedelta(minutes=30)
+    ).isoformat()
+    book._save()  # noqa: SLF001
+
+    first = book.sweep_expired()
+    assert [p.id for p in first] == [pending.id]
+    assert first[0].status == "expired"
+
+    # Second sweep must not re-report the same expiry.
+    assert book.sweep_expired() == []
+
+    msg = format_expiry_message(first[0])
+    assert "EXPIRED unconfirmed" in msg
+    assert "ASTEC" in msg
+    assert "BUY" in msg
+    assert pending.id in msg
+    assert "30 min TTL" in msg
+
+
+def test_tc_sweep_expired_ignores_confirmed_and_cancelled(tmp_path: Path) -> None:
+    book = OrderBook(tmp_path / "orders.json")
+    confirmed = book.add_pending(
+        _buy_req("A"), alert_symbol="A", alert_threshold=13.0,
+        alert_direction="UP", entry_ltp=1.0, ttl_minutes=30,
+    )
+    cancelled = book.add_pending(
+        _buy_req("B"), alert_symbol="B", alert_threshold=13.0,
+        alert_direction="UP", entry_ltp=1.0, ttl_minutes=30,
+    )
+    book.mark_pending(confirmed.id, "confirmed")
+    book.mark_pending(cancelled.id, "cancelled")
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    book._data["pending"][confirmed.id]["expires_at"] = past  # noqa: SLF001
+    book._data["pending"][cancelled.id]["expires_at"] = past  # noqa: SLF001
+    book._save()  # noqa: SLF001
+
+    assert book.sweep_expired() == []
+
+
 @pytest.mark.parametrize(
     ("text", "kind", "pid"),
     [

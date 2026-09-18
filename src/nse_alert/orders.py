@@ -102,6 +102,19 @@ class PendingOrder:
     entry_ltp: float = 0.0
 
 
+def format_expiry_message(item: PendingOrder) -> str:
+    """One-line Telegram/log message for a pending order that just expired."""
+    created = datetime.fromisoformat(item.created_at)
+    expires = datetime.fromisoformat(item.expires_at)
+    ttl_min = round((expires - created).total_seconds() / 60)
+    side = item.request.get("side", "?")
+    qty = item.request.get("quantity", "?")
+    return (
+        f"⏱ Order EXPIRED unconfirmed: {item.alert_symbol} {side} {qty} "
+        f"@ ~₹{item.entry_ltp:.2f} (id {item.id}, {ttl_min} min TTL)"
+    )
+
+
 class OrderBook:
     """Persist pending confirmations, daily order count, and open SL tracks."""
 
@@ -281,6 +294,31 @@ class OrderBook:
                 out.append(item)
         self._save()
         return out
+
+    def sweep_expired(self) -> list[PendingOrder]:
+        """Expire timed-out pending orders; return only those that just did.
+
+        `list_pending` also lazily expires as a side effect of listing, but a
+        caller polling it repeatedly would re-see the same already-expired
+        items every time — not useful for "notify once per expiry". This is
+        meant to be polled periodically (e.g. from the watch loop) so an
+        operator can be alerted exactly once when TRADE_CONFIRM_TTL_MINUTES
+        elapses on an unconfirmed order, instead of finding out at day's end
+        (see docs/RCA-2026-09-17.md, Incident A).
+        """
+        now = datetime.now(timezone.utc)
+        newly: list[PendingOrder] = []
+        for raw in list(self._data.get("pending", {}).values()):
+            item = PendingOrder(**raw)
+            if item.status != "pending":
+                continue
+            if datetime.fromisoformat(item.expires_at) < now:
+                item.status = "expired"
+                self._data["pending"][item.id]["status"] = "expired"
+                newly.append(item)
+        if newly:
+            self._save()
+        return newly
 
     def mark_pending(self, pending_id: str, status: str) -> PendingOrder | None:
         key = pending_id.upper()
