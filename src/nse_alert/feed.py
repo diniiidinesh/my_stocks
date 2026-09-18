@@ -82,7 +82,19 @@ class MockFeed:
 
 
 class KiteFeed:
-    """Live LTP via KiteTicker WebSocket (requires paid Kite Connect)."""
+    """Live LTP via KiteTicker WebSocket (requires paid Kite Connect).
+
+    KiteTicker retries a dropped connection on its own (default: up to 50
+    times, backing off to a 60s cap) but that retry loop is invisible unless
+    someone is reading logs — a 403 from an expired token during market
+    hours produced 6h of silent, useless "connected" state on 2026-09-18. To
+    surface this: `on_health_alert` fires once per outage after
+    `reconnect_alert_threshold` consecutive reconnect attempts (edge-
+    triggered — resets on the next successful connect), and
+    `on_feed_dead` fires once if KiteTicker exhausts all its retries and
+    gives up, so the caller can exit non-zero rather than leave a live
+    process with a socket that will never reconnect.
+    """
 
     def __init__(
         self,
@@ -91,13 +103,29 @@ class KiteFeed:
         access_token: str,
         instruments: list[Instrument],
         on_tick: TickHandler,
+        on_health_alert: Callable[[str], None] | None = None,
+        on_feed_dead: Callable[[str], None] | None = None,
+        reconnect_alert_threshold: int = 3,
     ) -> None:
         self.api_key = api_key
         self.access_token = access_token
         self.instruments = instruments
         self.on_tick = on_tick
+        self.on_health_alert = on_health_alert
+        self.on_feed_dead = on_feed_dead
+        self.reconnect_alert_threshold = reconnect_alert_threshold
         self._token_to_symbol = {i.instrument_token: i.symbol for i in instruments}
         self._ticker: Any = None
+        self._last_close_reason = ""
+        self._reconnect_alerted = False
+
+    def _alert(self, msg: str) -> None:
+        if self.on_health_alert is None:
+            return
+        try:
+            self.on_health_alert(msg)
+        except Exception:  # noqa: BLE001 — alerting must never crash the feed
+            logger.exception("Failed to send feed health alert")
 
     def start(self) -> None:
         from kiteconnect import KiteTicker
@@ -121,19 +149,52 @@ class KiteFeed:
 
         def on_connect(ws: Any, _response: Any) -> None:
             logger.info("KiteTicker connected; subscribing %d tokens (LTP)", len(tokens))
+            self._reconnect_alerted = False
             ws.subscribe(tokens)
             ws.set_mode(ws.MODE_LTP, tokens)
 
         def on_close(_ws: Any, code: Any, reason: Any) -> None:
+            self._last_close_reason = f"{code} {reason}"
             logger.warning("KiteTicker closed: %s %s", code, reason)
 
         def on_error(_ws: Any, code: Any, reason: Any) -> None:
             logger.error("KiteTicker error: %s %s", code, reason)
 
+        def on_reconnect(_ws: Any, attempts_count: int) -> None:
+            logger.warning("KiteTicker reconnecting (attempt %d)", attempts_count)
+            if attempts_count < self.reconnect_alert_threshold or self._reconnect_alerted:
+                return
+            self._reconnect_alerted = True
+            msg = (
+                f"⚠️ Market feed reconnecting (attempt {attempts_count}) — "
+                f"last close: {self._last_close_reason or 'unknown'}. A 403 "
+                "during market hours usually means the Kite token died — "
+                "run the daily login."
+            )
+            logger.error("%s", msg)
+            self._alert(msg)
+
+        def on_noreconnect(_ws: Any) -> None:
+            msg = (
+                "🔌 Market feed gave up reconnecting — last close: "
+                f"{self._last_close_reason or 'unknown'}. Watcher is exiting "
+                "rather than sit idle with a dead socket; check connectivity "
+                "or the Kite token, then restart."
+            )
+            logger.error("%s", msg)
+            self._alert(msg)
+            if self.on_feed_dead is not None:
+                try:
+                    self.on_feed_dead(msg)
+                except Exception:  # noqa: BLE001
+                    logger.exception("feed-dead handler failed")
+
         ticker.on_ticks = on_ticks
         ticker.on_connect = on_connect
         ticker.on_close = on_close
         ticker.on_error = on_error
+        ticker.on_reconnect = on_reconnect
+        ticker.on_noreconnect = on_noreconnect
         # threaded=True keeps the main thread free for KeyboardInterrupt.
         ticker.connect(threaded=True)
         logger.info("Kite feed started")

@@ -52,7 +52,7 @@ Nifty 500 ∪ Smallcap 250
 | `engine.py` | `%` move, multi-threshold dedupe, FO-only gate, ASM/F&O flags |
 | `universe.py` | NSE EQ instruments + quote liquidity screen |
 | `surveillance.py` | NFO underlyings + Zerodha ASM sheet |
-| `feed.py` | `MockFeed`, `KiteFeed` WebSocket |
+| `feed.py` | `MockFeed`, `KiteFeed` WebSocket; alerts on repeated reconnects, exits the watcher if reconnection is abandoned |
 | `report.py` | EOD UP/DOWN counts, close %, hold-level counts, gaps |
 | `notify/telegram.py` | Console + Telegram text + document upload |
 | `orders.py` | Order book, margin sizing, dry-run/confirm/auto, SL-Limit, trail; alerts once per pending-order expiry |

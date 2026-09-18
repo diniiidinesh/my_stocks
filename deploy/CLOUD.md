@@ -339,7 +339,10 @@ confirmation. See [../docs/ORDERS.md](../docs/ORDERS.md) and
   (see [../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md) P4). If you see
   `docker compose ps` report `Exited`, don't just re-run `up -d` — check
   `docker compose logs --tail 30` first; it's almost certainly a stale token
-  or a genuine config problem, not something a 4th restart would fix.
+  or a genuine config problem, not something a 4th restart would fix. The
+  same applies if `watch` exits because the market feed gave up reconnecting
+  (see [../docs/ALERTS.md](../docs/ALERTS.md) "Feed health") — that's also a
+  bad-token/connectivity problem to fix before restarting, not a fluke.
 
 ## Orders — modes
 

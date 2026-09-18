@@ -134,11 +134,33 @@ CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt
 
 Large whole-market `quote` batches often hit Cloudflare; the sample file avoids that.
 
+## Feed health (silence ≠ safety)
+
+KiteTicker retries a dropped WebSocket connection on its own — that retry
+loop is invisible unless someone is reading logs, and a token that dies
+mid-session (a 403 close) can leave `watch` "running" for hours while
+producing nothing (6h overnight on 2026-09-18, see
+[RCA-2026-09-17.md](RCA-2026-09-17.md)). Two guards now exist:
+
+- **Alert on repeated reconnects.** After 3 consecutive reconnect attempts,
+  one Telegram alert fires naming the last close code — a `403` during
+  market hours means the Kite token died; run the daily login. Edge-
+  triggered: it won't alert again until the feed actually reconnects, then
+  goes bad again.
+- **Exit if reconnection is abandoned.** If KiteTicker exhausts all its
+  retries, `watch` alerts and exits non-zero rather than sit idle with a
+  dead socket that `docker ps` still shows as healthy.
+
+Both alerts are suppressed outside **Mon–Fri 09:15–15:30 IST** to avoid
+overnight/weekend noise — the exit itself still happens regardless of the
+hour, so the process never lingers "running but useless."
+
 ## Related code
 
 | Module | Role |
 |--------|------|
 | `engine.py` | Thresholds, FO-only gate, ASM/F&O flags on `Alert` |
+| `feed.py` | `KiteFeed`/`MockFeed`; reconnect + dead-feed alerting |
 | `surveillance.py` | NFO underlyings + ASM sheet fetch |
 | `universe.py` | Cash EQ instruments + quote screen |
 | `report.py` | EOD UP/DOWN counts, per-scrip close %, hold-level counts, gaps |

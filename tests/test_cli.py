@@ -69,6 +69,63 @@ def test_watch_exits_and_alerts_on_bad_kite_token(
     assert "login" in sent[0].lower()
 
 
+def test_watch_exits_nonzero_when_feed_dies_permanently(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A feed that gives up reconnecting must not leave watch running with a
+    dead socket that looks healthy to `docker ps` (2026-09-18 6h overnight
+    silence, see docs/RCA-2026-09-17.md P5)."""
+    from nse_alert.universe import Instrument
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("KITE_API_KEY", "k")
+    monkeypatch.setenv("KITE_ACCESS_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "999")
+
+    class _FakeKite:
+        def profile(self) -> dict[str, Any]:
+            return {"user_id": "AB1234"}
+
+    fake_instruments = [
+        Instrument(
+            symbol="AAA",
+            instrument_token=1,
+            name="A",
+            last_price=100.0,
+            prev_close=100.0,
+            turnover_cr=50.0,
+        )
+    ]
+
+    class _DeadOnArrivalFeed:
+        def __init__(self, **kwargs: Any) -> None:
+            self._on_feed_dead = kwargs["on_feed_dead"]
+
+        def start(self) -> None:
+            self._on_feed_dead("🔌 feed dead in test")
+
+        def stop(self) -> None:
+            pass
+
+    monkeypatch.setattr(cli_module, "_kite_client", lambda *a, **kw: _FakeKite())
+    monkeypatch.setattr(cli_module, "build_universe", lambda **kw: fake_instruments)
+    monkeypatch.setattr(cli_module, "load_nfo_equity_underlyings", lambda kite: set())
+    monkeypatch.setattr(cli_module, "load_asm_symbols", lambda **kw: set())
+    monkeypatch.setattr(cli_module, "KiteFeed", _DeadOnArrivalFeed)
+
+    sent: list[str] = []
+    monkeypatch.setattr(
+        cli_module.TelegramNotifier, "send_text", lambda self, msg, **kw: sent.append(msg)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["watch", "--feed", "kite"])
+
+    assert result.exit_code == 1, result.output
+    assert any("feed dead in test" in m for m in sent), sent
+
+
 def test_watch_alerts_on_pre_expired_pending_order(tmp_path: Path, monkeypatch) -> None:
     """watch must notice and alert on an already-expired pending order on its
     first eligible tick, not only when someone happens to run `pending`."""
@@ -125,3 +182,16 @@ def test_watch_alerts_on_pre_expired_pending_order(tmp_path: Path, monkeypatch) 
     assert any("EXPIRED unconfirmed" in m for m in sent), sent
     assert any("DEMO13" in m for m in sent), sent
     assert any(pending.id in m for m in sent), sent
+
+
+def test_in_ist_market_hours() -> None:
+    from nse_alert.cli import _in_ist_market_hours
+
+    # Wed 2026-09-16, 10:00 IST = 04:30 UTC.
+    assert _in_ist_market_hours(datetime(2026, 9, 16, 4, 30, tzinfo=timezone.utc))
+    # Wed, 09:14 IST (just before open) = 03:44 UTC.
+    assert not _in_ist_market_hours(datetime(2026, 9, 16, 3, 44, tzinfo=timezone.utc))
+    # Wed, 15:31 IST (just after close) = 10:01 UTC.
+    assert not _in_ist_market_hours(datetime(2026, 9, 16, 10, 1, tzinfo=timezone.utc))
+    # Sat 2026-09-19, 10:00 IST = 04:30 UTC — weekend.
+    assert not _in_ist_market_hours(datetime(2026, 9, 19, 4, 30, tzinfo=timezone.utc))

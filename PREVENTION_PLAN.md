@@ -12,7 +12,7 @@ the reason nobody noticed them.**
 > | P2 — alert on dead confirm listener | **Done** — `TelegramConfirmListener` alerts on the 3rd consecutive `getUpdates` failure, edge-triggered, with exponential backoff |
 > | P3 — notify on order expiry | **Done** — `OrderBook.sweep_expired()` polled from `watch`, throttled to 30s, batches >3 expiries into one message |
 > | P4 — validate Kite token at startup | **Done** — `watch` checks the token before any setup and exits+alerts on `TokenException`; mid-session sizing failures on a bad token now refuse+alert instead of silently falling back to an approximate estimate; `docker-compose.yml` restart policy changed to `on-failure:3` |
-> | P5 — alert when the market feed drops | Open |
+> | P5 — alert when the market feed drops | **Done** — `KiteFeed` alerts once after 3 consecutive reconnect attempts (edge-triggered, market-hours-gated) and `watch` exits non-zero if reconnection is abandoned entirely |
 > | P6 — daily heartbeat | Open |
 
 Every incident so far has the same shape: something stopped working, the app

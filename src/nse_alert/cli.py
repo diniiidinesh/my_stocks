@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import signal
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
@@ -326,6 +327,21 @@ def watch_cmd(
         (settings.state_dir / "orders.json").resolve(),
     )
 
+    stop = {"flag": False}
+    feed_dead = {"v": False}
+
+    def _feed_health_alert(msg: str) -> None:
+        # Only market hours: an overnight/weekend reconnect loop is noise —
+        # the watcher isn't expected to be doing anything useful then anyway.
+        if tg and _in_ist_market_hours():
+            tg.send_text(msg)
+
+    def _feed_dead(msg: str) -> None:
+        feed_dead["v"] = True
+        if tg and _in_ist_market_hours():
+            tg.send_text(msg)
+        stop["flag"] = True
+
     price_feed: MockFeed | KiteFeed
     if use_kite:
         price_feed = KiteFeed(
@@ -333,6 +349,8 @@ def watch_cmd(
             access_token=settings.kite_access_token,
             instruments=instruments,
             on_tick=on_tick,
+            on_health_alert=_feed_health_alert,
+            on_feed_dead=_feed_dead,
         )
     else:
         price_feed = MockFeed(
@@ -343,7 +361,6 @@ def watch_cmd(
             auto_stop_after_alert=True,
         )
 
-    stop = {"flag": False}
     confirm_listener: TelegramConfirmListener | None = None
 
     def _on_confirm(pending_id: str) -> None:
@@ -392,8 +409,20 @@ def watch_cmd(
 
     logger.info("Done. Alerts fired this run: %d", alert_count["n"])
     _emit_day_report(settings, telegram=settings.telegram_configured)
+    if feed_dead["v"]:
+        raise SystemExit(1)
     if not use_kite and alert_count["n"] == 0:
         raise SystemExit(1)
+
+
+def _in_ist_market_hours(now_utc: datetime | None = None) -> bool:
+    """Mon-Fri 09:15-15:30 IST. Fixed +5:30 offset — no DST, no tzdata needed."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    ist = now_utc + timedelta(hours=5, minutes=30)
+    if ist.weekday() >= 5:  # Sat=5, Sun=6
+        return False
+    minutes = ist.hour * 60 + ist.minute
+    return 9 * 60 + 15 <= minutes <= 15 * 60 + 30
 
 
 def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
