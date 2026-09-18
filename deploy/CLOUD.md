@@ -131,6 +131,27 @@ part of the instance plan.
 > `/etc/fstab` line and disappeared at the last reboot. Re-run `swapon` and add
 > the line.
 
+### Log rotation
+
+`/var/log/nse-screen.log` and `/var/log/nse-report.log` (see the cron entries
+below) grow forever otherwise, and — until the `httpx` logging fix in
+`src/nse_alert/cli.py` — used to contain the Telegram bot token in plaintext
+(see [../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md) P4). Install once:
+
+```bash
+sudo cp deploy/nse-alert.logrotate /etc/logrotate.d/nse-alert
+sudo chmod 644 /etc/logrotate.d/nse-alert
+sudo logrotate -d /etc/logrotate.d/nse-alert   # dry run, checks syntax
+```
+
+If either log file already exists with looser permissions than `640`, or a
+token may have been logged to it before the `httpx` fix was deployed, purge it:
+
+```bash
+sudo truncate -s 0 /var/log/nse-screen.log /var/log/nse-report.log
+sudo chmod 640 /var/log/nse-screen.log /var/log/nse-report.log
+```
+
 ### `.env` for cloud (example)
 
 ```env
@@ -262,7 +283,9 @@ git pull origin main          # optional — only when you want updates
 docker compose run --rm nse-alert nse-alert set-token <ACCESS_TOKEN>
 
 # 2. (re)start the watcher — idempotent, never creates a second one
-docker compose up -d --force-recreate
+#    --build is required whenever you pulled code above; without it the
+#    container is recreated from the OLD image and your pull does nothing
+docker compose up -d --build --force-recreate
 
 # 3. verify before you walk away
 docker compose ps
@@ -289,8 +312,17 @@ confirmation. See [../docs/ORDERS.md](../docs/ORDERS.md) and
 
 ### Gotchas
 
-- **`docker compose up -d --force-recreate` is idempotent.** Running it twice
-  replaces the container; it does not create a second watcher. Re-run it freely.
+- **`docker compose up -d --build --force-recreate` is idempotent.** Running it
+  twice replaces the container; it does not create a second watcher. Re-run it
+  freely.
+- **`--force-recreate` alone does not rebuild the image.** After a `git pull`
+  you must pass `--build`, or the new container starts from the old image and
+  silently runs the code you just replaced. Confirm what is actually running:
+
+  ```bash
+  docker compose exec nse-alert git -C /app rev-parse --short HEAD 2>/dev/null \
+    || docker inspect -f '{{.Created}}' nse-alert   # image build time
+  ```
 - **Changing `.env` does nothing until you recreate.** A running watcher never
   re-reads `.env`, so a `TRADE_MODE` edit needs step 2 again. The banner in step
   3 is how you confirm the change actually took.

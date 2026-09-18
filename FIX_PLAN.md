@@ -1,6 +1,6 @@
 # Fix plan — nse-alert (handoff)
 
-> **Status as of 2026-09-17 23:10 IST.** P0–P4 are **done**.
+> **Status as of 2026-09-18 08:20 IST.** P0–P4 are **done and deployed**.
 > This file is a point-in-time handoff. The durable write-up — including the
 > prevention controls that are still unbuilt — is
 > [`docs/RCA-2026-09-17.md`](docs/RCA-2026-09-17.md).
@@ -11,7 +11,7 @@
 > | P1 — container as `ubuntu` | **Done** — PR #18, merged; verified live |
 > | P2 — cron PATH + UTC docs | **Done** — PR #18, merged |
 > | P3 — VM drift | **Done** — VM pulled to `a78cc67`, image rebuilt |
-> | P4 — bot token in logs | **Done** — `httpx` quieted to WARNING; VM log truncated + chmod 640 |
+> | P4 — bot token in logs | **Done** — PR #19, merged (`aa04acc`, `httpx` → WARNING). Deployed: VM rebuilt + recreated, confirmed zero token-bearing log lines from the running container. `nse-screen.log` truncated + `chmod 640`. Log rotation codified as `deploy/nse-alert.logrotate` and installed on the VM |
 >
 > `deploy/nse-alert.service` has been **deleted** and Docker is now documented
 > as the only production path.
