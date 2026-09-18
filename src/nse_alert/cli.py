@@ -11,6 +11,7 @@ from nse_alert.ipv4 import force_ipv4
 from nse_alert.confirm_bot import TelegramConfirmListener
 from nse_alert.config import Settings
 from nse_alert.engine import AlertEngine, parse_thresholds
+from nse_alert.lock import acquire_single_instance, release_single_instance
 from nse_alert.feed import KiteFeed, MockFeed
 from nse_alert.notify import TelegramNotifier, build_notifier
 from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest
@@ -102,6 +103,9 @@ def watch_cmd(
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+
+    lock_fh = acquire_single_instance(settings.state_dir)
+
     feed_mode = (feed or settings.feed_mode).strip().lower()
     use_kite = feed_mode == "kite"
 
@@ -326,6 +330,7 @@ def watch_cmd(
         price_feed.stop()
         if confirm_listener:
             confirm_listener.stop()
+        release_single_instance(lock_fh)
 
     logger.info("Done. Alerts fired this run: %d", alert_count["n"])
     _emit_day_report(settings, telegram=settings.telegram_configured)
