@@ -103,6 +103,17 @@ Close prices come from **Kite quotes** when `KITE_*` is set; otherwise the repor
 
 **Login impact:** none for report formatting — same daily token; Kite closes need a valid token.
 
+### Daily heartbeat
+
+`nse-alert report --telegram` sends a second message right after the day
+report: a `📊 Daily heartbeat` summarizing mode, feed, alerts fired (by
+threshold), orders placed/expired, and whether the screener has run yet.
+This folds into the existing 15:40 IST report cron — no separate schedule.
+The content matters less than the fact that it arrives: every incident in
+[RCA-2026-09-17.md](RCA-2026-09-17.md) was something that silently *didn't*
+happen, so **a missing heartbeat by ~16:00 IST is itself the signal to go
+check on the VM**, not the message content.
+
 ### Example snippets
 
 ```text

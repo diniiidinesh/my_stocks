@@ -320,6 +320,19 @@ class OrderBook:
             self._save()
         return newly
 
+    def counts_by_status(self) -> dict[str, int]:
+        """Today's pending-order counts by status, after sweeping expiries.
+
+        The book resets daily (see `_load`), so these are always "today"'s
+        counts without any date filtering needed here.
+        """
+        self.sweep_expired()
+        counts: dict[str, int] = {}
+        for raw in self._data.get("pending", {}).values():
+            status = raw.get("status", "unknown")
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
     def mark_pending(self, pending_id: str, status: str) -> PendingOrder | None:
         key = pending_id.upper()
         raw = self._data.get("pending", {}).get(key)

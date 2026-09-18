@@ -195,3 +195,99 @@ def test_in_ist_market_hours() -> None:
     assert not _in_ist_market_hours(datetime(2026, 9, 16, 10, 1, tzinfo=timezone.utc))
     # Sat 2026-09-19, 10:00 IST = 04:30 UTC — weekend.
     assert not _in_ist_market_hours(datetime(2026, 9, 19, 4, 30, tzinfo=timezone.utc))
+
+
+def test_build_heartbeat_reflects_real_state(tmp_path: Path, monkeypatch) -> None:
+    from datetime import date as date_cls
+
+    from nse_alert.cli import _build_heartbeat
+    from nse_alert.config import Settings
+    from nse_alert.engine import Alert
+    from nse_alert.report import build_day_report
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TRADE_MODE", "confirm")
+    monkeypatch.setenv("FEED_MODE", "kite")
+    settings = Settings()
+    day = date_cls(2026, 9, 18)
+
+    events = [
+        Alert(
+            symbol="AAA", ltp=110.0, prev_close=100.0, change_pct=10.0,
+            direction="UP", threshold_pct=7.0,
+            fired_at=datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc),
+        ),
+        Alert(
+            symbol="BBB", ltp=113.0, prev_close=100.0, change_pct=13.0,
+            direction="UP", threshold_pct=13.0,
+            fired_at=datetime(2026, 9, 18, 11, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    report = build_day_report(events, report_date=day)
+
+    book = OrderBook(tmp_path / ".nse_alert" / "orders.json")
+    req = OrderRequest(
+        symbol="AAA", side="BUY", quantity=5, product="MIS", order_type="MARKET",
+        price=None, trigger_price=None, market_protection=2, tag="t", reason="test",
+    )
+    pending = book.add_pending(
+        req, alert_symbol="AAA", alert_threshold=13.0, alert_direction="UP",
+        entry_ltp=100.0, ttl_minutes=30,
+    )
+    created = datetime.now(timezone.utc) - timedelta(minutes=31)
+    book._data["pending"][pending.id]["created_at"] = created.isoformat()  # noqa: SLF001
+    book._data["pending"][pending.id]["expires_at"] = (  # noqa: SLF001
+        created + timedelta(minutes=30)
+    ).isoformat()
+    book._save()  # noqa: SLF001
+
+    msg = _build_heartbeat(settings, report, book, day)
+
+    assert "2026-09-18" in msg
+    assert "Mode: confirm" in msg
+    assert "Feed: kite" in msg
+    assert "Alerts: 2 fired" in msg
+    assert "7%:1" in msg
+    assert "13%:1" in msg
+    assert "0 placed, 1 expired unconfirmed" in msg
+    assert "Screener: scheduled 20:30 IST" in msg
+    assert "Warnings: 1 order(s) expired unconfirmed" in msg
+
+
+def test_build_heartbeat_no_warnings_when_nothing_expired(tmp_path: Path, monkeypatch) -> None:
+    from datetime import date as date_cls
+
+    from nse_alert.cli import _build_heartbeat
+    from nse_alert.config import Settings
+    from nse_alert.report import build_day_report
+
+    monkeypatch.chdir(tmp_path)
+    settings = Settings()
+    day = date_cls(2026, 9, 18)
+    report = build_day_report([], report_date=day)
+    book = OrderBook(tmp_path / ".nse_alert" / "orders.json")
+
+    msg = _build_heartbeat(settings, report, book, day)
+
+    assert "Alerts: 0 fired" in msg
+    assert "0 placed, 0 expired unconfirmed" in msg
+    assert "Warnings: none" in msg
+
+
+def test_report_telegram_sends_report_then_heartbeat(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "999")
+
+    sent: list[str] = []
+    monkeypatch.setattr(
+        cli_module.TelegramNotifier, "send_text", lambda self, msg, **kw: sent.append(msg)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["report", "--telegram"])
+
+    assert result.exit_code == 0, result.output
+    assert len(sent) == 2
+    assert "end-of-day report" in sent[0]
+    assert "Daily heartbeat" in sent[1]

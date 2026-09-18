@@ -393,6 +393,29 @@ def test_tc_sweep_expired_ignores_confirmed_and_cancelled(tmp_path: Path) -> Non
     assert book.sweep_expired() == []
 
 
+def test_tc_counts_by_status_sweeps_first_then_counts(tmp_path: Path) -> None:
+    book = OrderBook(tmp_path / "orders.json")
+    book.add_pending(
+        _buy_req("A"), alert_symbol="A", alert_threshold=13.0,
+        alert_direction="UP", entry_ltp=1.0, ttl_minutes=30,
+    )
+    about_to_expire = book.add_pending(
+        _buy_req("B"), alert_symbol="B", alert_threshold=13.0,
+        alert_direction="UP", entry_ltp=1.0, ttl_minutes=30,
+    )
+    confirmed = book.add_pending(
+        _buy_req("C"), alert_symbol="C", alert_threshold=13.0,
+        alert_direction="UP", entry_ltp=1.0, ttl_minutes=30,
+    )
+    book.mark_pending(confirmed.id, "confirmed")
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    book._data["pending"][about_to_expire.id]["expires_at"] = past  # noqa: SLF001
+    book._save()  # noqa: SLF001
+
+    counts = book.counts_by_status()
+    assert counts == {"pending": 1, "expired": 1, "confirmed": 1}
+
+
 @pytest.mark.parametrize(
     ("text", "kind", "pid"),
     [

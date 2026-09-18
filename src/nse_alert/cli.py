@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import signal
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import click
@@ -23,6 +23,7 @@ from nse_alert.orders import (
     format_expiry_message,
 )
 from nse_alert.report import (
+    DayReport,
     build_day_report,
     format_day_report,
     load_events,
@@ -552,6 +553,45 @@ def _emit_day_report(settings: Settings, *, telegram: bool) -> None:
         ).send_text(text)
 
 
+def _build_heartbeat(
+    settings: Settings, report: DayReport, book: OrderBook, day: date
+) -> str:
+    """One-message-a-day summary. The point isn't the content — it's that it
+    arrives at all: every 2026-09-17/18 incident was something that *didn't*
+    happen, and a missing heartbeat by ~16:00 IST is itself the alarm.
+    """
+    total = len(report.events)
+    per_threshold = "  ".join(
+        f"{t:g}%:{c}" for t, c in sorted(report.counts_by_threshold.items())
+    )
+    alerts_line = f"Alerts: {total} fired" + (f" ({per_threshold})" if per_threshold else "")
+
+    status_counts = book.counts_by_status()
+    expired = status_counts.get("expired", 0)
+    orders_line = f"Orders: {book.placed_count} placed, {expired} expired unconfirmed"
+
+    screener_path = settings.state_dir / "screener" / f"screen-{day.isoformat()}.xlsx"
+    screener_line = (
+        "Screener: already ran today"
+        if screener_path.exists()
+        else "Screener: scheduled 20:30 IST"
+    )
+
+    warnings: list[str] = []
+    if expired > 0:
+        warnings.append(f"{expired} order(s) expired unconfirmed")
+    warnings_line = "Warnings: " + (", ".join(warnings) if warnings else "none")
+
+    return (
+        f"📊 Daily heartbeat — {day.isoformat()}\n"
+        f"Mode: {settings.resolved_trade_mode} | Feed: {settings.feed_mode}\n"
+        f"{alerts_line}\n"
+        f"{orders_line}\n"
+        f"{screener_line}\n"
+        f"{warnings_line}"
+    )
+
+
 @main.command("report")
 @click.option(
     "--date",
@@ -590,10 +630,10 @@ def report_cmd(report_date: object | None, telegram: bool) -> None:
     click.echo(text)
     click.echo(f"\nSaved report: {out_path}")
     if telegram and settings.telegram_bot_token and settings.telegram_chat_id:
-        TelegramNotifier(
-            settings.telegram_bot_token,
-            settings.telegram_chat_id,
-        ).send_text(text)
+        notifier = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+        notifier.send_text(text)
+        book = OrderBook(settings.state_dir / "orders.json")
+        notifier.send_text(_build_heartbeat(settings, report, book, day))
     elif telegram:
         raise click.ClickException(
             "Telegram requested but TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are unset"

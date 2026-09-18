@@ -13,7 +13,11 @@ the reason nobody noticed them.**
 > | P3 — notify on order expiry | **Done** — `OrderBook.sweep_expired()` polled from `watch`, throttled to 30s, batches >3 expiries into one message |
 > | P4 — validate Kite token at startup | **Done** — `watch` checks the token before any setup and exits+alerts on `TokenException`; mid-session sizing failures on a bad token now refuse+alert instead of silently falling back to an approximate estimate; `docker-compose.yml` restart policy changed to `on-failure:3` |
 > | P5 — alert when the market feed drops | **Done** — `KiteFeed` alerts once after 3 consecutive reconnect attempts (edge-triggered, market-hours-gated) and `watch` exits non-zero if reconnection is abandoned entirely |
-> | P6 — daily heartbeat | Open |
+> | P6 — daily heartbeat | **Done** — `nse-alert report --telegram` now sends a `📊 Daily heartbeat` message after the day report; no new cron entry needed |
+>
+> P1–P4 verified live on the VM (rebuilt + recreated after each merge). P5/P6
+> land in the same deploy cycle; the next real signal is whether tomorrow's
+> 15:40 IST heartbeat actually arrives.
 
 Every incident so far has the same shape: something stopped working, the app
 logged it locally, and the operator found out hours later — or only because
