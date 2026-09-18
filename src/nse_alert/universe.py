@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -132,12 +134,91 @@ def _quote_batches(kite: Any, symbols: list[str]) -> dict[str, dict[str, Any]]:
     return quote_map
 
 
+def load_prev_session_turnover_cr(
+    *,
+    state_dir: str | Path = "",
+    session_day: object | None = None,
+) -> dict[str, float]:
+    """Turnover (₹ crore) per symbol from the last *completed* NSE session.
+
+    The intraday liquidity screen must not use today's live volume: before the
+    open every symbol reads ``volume=0``, so a live screen filters the whole
+    universe away and ``build_universe`` fails until enough turnover has
+    accumulated mid-session. Prior-session turnover is stable from 09:00 and is
+    what the README has always described.
+
+    Returns ``{}`` when the bhavcopy is unavailable (holiday, network, layout
+    change); callers fall back to the live-volume screen.
+    """
+    # Imported lazily: `screener` imports this module, so a top-level import
+    # would be circular.
+    from nse_alert.screener.delivery import fetch_bhavcopy_day
+    from nse_alert.screener.history import latest_completed_nse_session
+
+    day = session_day or latest_completed_nse_session()
+
+    cache_path: Path | None = None
+    if state_dir:
+        cache_path = Path(state_dir) / "universe" / f"turnover-{day}.json"
+        if cache_path.exists():
+            try:
+                cached = json.loads(cache_path.read_text())
+                logger.info(
+                    "Prior-session turnover: %d symbols from cache (%s)",
+                    len(cached),
+                    day,
+                )
+                return {str(k): float(v) for k, v in cached.items()}
+            except (OSError, ValueError) as exc:
+                logger.warning("Ignoring unreadable turnover cache: %s", exc)
+
+    try:
+        df = fetch_bhavcopy_day(day)
+    except Exception as exc:  # network, layout, HTTP — never fatal
+        logger.warning(
+            "Prior-session turnover unavailable for %s (%s); "
+            "falling back to live-volume liquidity screen",
+            day,
+            exc,
+        )
+        return {}
+
+    if df.empty or "turnover_lacs" not in df.columns:
+        logger.warning(
+            "Bhavcopy for %s has no turnover column; "
+            "falling back to live-volume liquidity screen",
+            day,
+        )
+        return {}
+
+    out: dict[str, float] = {}
+    for symbol, lacs in zip(df["symbol"], df["turnover_lacs"], strict=False):
+        try:
+            value = float(str(lacs).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            out[str(symbol).strip().upper()] = value / 100.0  # lacs → crore
+
+    logger.info("Prior-session turnover: %d symbols from bhavcopy %s", len(out), day)
+
+    if cache_path is not None and out:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(out))
+        except OSError as exc:
+            logger.warning("Could not cache turnover: %s", exc)
+
+    return out
+
+
 def _build_from_kite_quotes(
     kite: Any,
     *,
     min_turnover_cr: float,
     min_price: float,
     symbols_filter: list[str] | None = None,
+    prev_turnover_cr: dict[str, float] | None = None,
 ) -> list[Instrument]:
     """Screen and build the watchlist from Kite instruments + quotes."""
     nse = load_nse_eq_instruments(kite)
@@ -174,6 +255,15 @@ def _build_from_kite_quotes(
 
     min_turnover = min_turnover_cr * 1e7
     apply_liquidity = symbols_filter is None
+    # Prefer the last completed session's turnover: today's live volume is 0
+    # before the open, which would filter the entire universe away.
+    use_prev = bool(prev_turnover_cr)
+    if apply_liquidity:
+        logger.info(
+            "Liquidity screen: %s turnover, min ₹%.1f cr",
+            "prior-session" if use_prev else "live (fallback)",
+            min_turnover_cr,
+        )
     instruments: list[Instrument] = []
 
     for symbol in symbols:
@@ -182,8 +272,13 @@ def _build_from_kite_quotes(
         prev_close = float(ohlc.get("close") or 0.0)
         last_price = float(q.get("last_price") or prev_close or 0.0)
         volume = float(q.get("volume") or 0.0)
-        turnover = volume * last_price if volume and last_price else 0.0
-        turnover_cr = turnover / 1e7
+        if use_prev:
+            assert prev_turnover_cr is not None
+            turnover_cr = float(prev_turnover_cr.get(symbol, 0.0))
+            turnover = turnover_cr * 1e7
+        else:
+            turnover = volume * last_price if volume and last_price else 0.0
+            turnover_cr = turnover / 1e7
 
         if prev_close <= 0:
             continue
@@ -205,8 +300,12 @@ def _build_from_kite_quotes(
 
     if not instruments:
         raise RuntimeError(
-            "Kite universe is empty after filters. "
-            "Lower MIN_TURNOVER_CR / MIN_PRICE, or set CUSTOM_UNIVERSE_FILE "
+            "Kite universe is empty after filters "
+            f"(MIN_TURNOVER_CR={min_turnover_cr}, MIN_PRICE={min_price}). "
+            "If the prior-session turnover screen was unavailable this falls "
+            "back to live volume, which is 0 before the open — check the "
+            "'Liquidity screen:' log line above. Otherwise lower "
+            "MIN_TURNOVER_CR / MIN_PRICE, or set CUSTOM_UNIVERSE_FILE "
             "(see universes/liquid_sample.txt)."
         )
     logger.info(
@@ -226,6 +325,7 @@ def build_universe(
     kite_access_token: str = "",
     custom_universe_file: str = "",
     mock: bool = False,
+    state_dir: str | Path = "",
 ) -> list[Instrument]:
     """Build the intraday watchlist.
 
@@ -261,11 +361,17 @@ def build_universe(
 
     if has_kite:
         kite = _kite_client(kite_api_key, kite_access_token)
+        prev_turnover = (
+            load_prev_session_turnover_cr(state_dir=state_dir)
+            if custom_symbols is None
+            else {}
+        )
         return _build_from_kite_quotes(
             kite,
             min_turnover_cr=min_turnover_cr,
             min_price=min_price,
             symbols_filter=custom_symbols,
+            prev_turnover_cr=prev_turnover,
         )
 
     if custom_symbols is not None:
