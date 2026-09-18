@@ -28,6 +28,7 @@ from nse_alert.report import (
     write_day_report,
 )
 from nse_alert.surveillance import load_asm_symbols, load_nfo_equity_underlyings
+from nse_alert.trailing import TrailingStopRunner
 from nse_alert.universe import Instrument, build_universe, _kite_client
 
 logging.basicConfig(
@@ -772,6 +773,82 @@ def confirm_cmd(pending_id: str) -> None:
             _pending_not_found_msg(settings, book, pending_id.upper())
         )
     click.echo(f"Pending {pending_id} → {item.status}")
+
+
+@main.command("trail")
+@click.argument("symbol")
+@click.argument("qty", type=int)
+@click.option(
+    "--pct",
+    type=float,
+    default=None,
+    help="Trailing distance %% below the running high (default: TRADE_STOP_LOSS_PCT)",
+)
+@click.option(
+    "--poll-sec",
+    type=float,
+    default=5.0,
+    show_default=True,
+    help="Seconds between LTP polls",
+)
+@click.option(
+    "--dry-run/--live",
+    default=True,
+    help="Dry-run by default; pass --live to send real orders to Kite",
+)
+def trail_cmd(symbol: str, qty: int, pct: float | None, poll_sec: float, dry_run: bool) -> None:
+    """Attach a trailing stop-loss to a position you already hold (MIS/intraday).
+
+    Kite has no native trailing-SL for intraday products, so this places a
+    SELL SL-Limit order and polls the LTP, ratcheting the trigger up as the
+    price makes new highs — never down. Runs until the stop is hit or
+    cancelled (Ctrl+C, or Telegram `/trail_cancel SYMBOL` if TELEGRAM_* is
+    configured). One process manages one symbol.
+    """
+    settings = Settings()
+    trail_pct = pct if pct is not None else settings.trade_stop_loss_pct
+    mode = "dry_run" if dry_run else "live"
+    if mode == "live" and (not settings.kite_api_key or not settings.kite_access_token):
+        raise click.ClickException("Live trailing needs KITE_API_KEY and KITE_ACCESS_TOKEN")
+    if settings.kite_force_ipv4:
+        force_ipv4()
+
+    tg = (
+        TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
+        if settings.telegram_configured
+        else None
+    )
+
+    def _notify(text: str) -> None:
+        click.echo(text)
+        if tg:
+            tg.send_text(text)
+
+    runner = TrailingStopRunner(
+        kite_api_key=settings.kite_api_key,
+        kite_access_token=settings.kite_access_token,
+        symbol=symbol,
+        quantity=qty,
+        trail_pct=trail_pct,
+        stop_limit_ticks=settings.trade_stop_limit_ticks,
+        product=settings.trade_product,
+        poll_sec=poll_sec,
+        mode=mode,
+        telegram_bot_token=settings.telegram_bot_token,
+        telegram_chat_id=settings.telegram_chat_id,
+        on_message=_notify,
+    )
+
+    def _handle_sig(_signum: int, _frame: object) -> None:
+        runner.cancel(reason="stopped (signal)")
+
+    signal.signal(signal.SIGINT, _handle_sig)
+    signal.signal(signal.SIGTERM, _handle_sig)
+
+    try:
+        runner.run()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command("login")
