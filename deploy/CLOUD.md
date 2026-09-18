@@ -331,6 +331,15 @@ confirmation. See [../docs/ORDERS.md](../docs/ORDERS.md) and
   assuming it failed — it usually succeeded.
 - **The 15:35 IST cron runs `docker compose stop`.** The watcher stays down
   until your next morning run. That is intentional.
+- **The container restarts at most 3 times on its own (`restart: on-failure:3`),
+  then stops.** This is deliberate — `unless-stopped` retried a bad-token
+  crash loop forever with no alert (13 restarts on 2026-09-18, silent). A
+  bad token cannot self-heal by restarting, so `watch` itself now checks the
+  token at startup and alerts + exits before the crash loop would even start
+  (see [../docs/RCA-2026-09-17.md](../docs/RCA-2026-09-17.md) P4). If you see
+  `docker compose ps` report `Exited`, don't just re-run `up -d` — check
+  `docker compose logs --tail 30` first; it's almost certainly a stale token
+  or a genuine config problem, not something a 4th restart would fix.
 
 ## Orders — modes
 
