@@ -65,6 +65,9 @@ def _normalize_bhav_df(df: pd.DataFrame) -> pd.DataFrame:
         "traded_qty": ("TTL_TRD_QNTY", "TOTAL_TRADES", "TOTTRDQTY"),
         "delivery_qty": ("DELIV_QTY", "DELIVERY_QTY", "DELIVQTY"),
         "delivery_pct": ("DELIV_PER", "DELIVERY_PER", "DELIVPER"),
+        # Optional — used by the intraday universe's prior-session liquidity
+        # screen. Not in `need` below, so an older bhavcopy layout still parses.
+        "turnover_lacs": ("TURNOVER_LACS", "TURNOVER", "TOTTRDVAL"),
     }.items():
         for alias in aliases:
             if alias in cols:

@@ -119,7 +119,11 @@ Per-scrip close after alert:
 Live default (no NSE website scrape):
 
 1. NSE cash EQ from `kite.instruments("NSE")` (mainboard filter)
-2. Liquidity: `volume × LTP` ≥ `MIN_TURNOVER_CR` (₹ crore)
+2. Liquidity: **prior-session** turnover ≥ `MIN_TURNOVER_CR` (₹ crore), read
+   from the last completed NSE session's bhavcopy — not today's live volume,
+   which is 0 before the open and would leave the universe empty. Falls back
+   to live `volume × LTP` if the bhavcopy is unavailable; the startup log
+   line `Liquidity screen: prior-session|live` says which was used.
 3. Prev close ≥ `MIN_PRICE`
 
 For first live runs, prefer a fixed list:

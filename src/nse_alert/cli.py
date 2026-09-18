@@ -56,6 +56,7 @@ def universe_cmd(min_turnover_cr: float | None, min_price: float | None) -> None
         kite_access_token=settings.kite_access_token,
         custom_universe_file=settings.custom_universe_file,
         mock=mock and not settings.custom_universe_file,
+        state_dir=settings.state_dir,
     )
     click.echo(f"{'SYMBOL':<12} {'PREV_CLOSE':>12} {'TURNOVER_CR':>12} {'TOKEN':>10}")
     for inst in instruments:
@@ -117,6 +118,7 @@ def watch_cmd(
         kite_access_token=settings.kite_access_token if use_kite else "",
         custom_universe_file=settings.custom_universe_file,
         mock=not use_kite and not settings.custom_universe_file,
+        state_dir=settings.state_dir,
     )
 
     if not use_kite and not settings.custom_universe_file:
