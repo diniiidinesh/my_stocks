@@ -8,7 +8,14 @@ import pytest
 
 from nse_alert.confirm_bot import _CANCEL_RE, _CONFIRM_RE
 from nse_alert.engine import Alert, AlertEngine
-from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest, parse_order_margins_payload, round_tick
+from nse_alert.orders import (
+    OrderBook,
+    OrderExecutor,
+    OrderRequest,
+    SizingRefusedError,
+    parse_order_margins_payload,
+    round_tick,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +514,13 @@ def test_cli_order_without_qty_requires_ltp_in_margin_mode(tmp_path: Path) -> No
     from nse_alert.cli import _cli_size_quantity
     from nse_alert.config import Settings
 
-    settings = Settings(TRADE_SIZING="margin", TRADE_QTY=1)
+    # Explicit empty creds: _quote_ltp must short-circuit to 0.0 without a
+    # real network call. Without this, Settings() also picks up this repo's
+    # real .env, so the test's pass/fail depended on whether today's live
+    # Kite token happened to be valid when pytest ran.
+    settings = Settings(
+        TRADE_SIZING="margin", TRADE_QTY=1, KITE_API_KEY="", KITE_ACCESS_TOKEN=""
+    )
     ex = _executor(tmp_path, sizing_mode="margin", default_qty=1)
     with pytest.raises(click.ClickException, match="TRADE_QTY=1"):
         _cli_size_quantity(settings, ex, "INFY", "BUY")
@@ -664,6 +677,52 @@ def test_tc_margin_sizing_fallback_leverage(tmp_path: Path) -> None:
     qty, note = ex.size_quantity(symbol="AAA", price=500.0, side="BUY")
     # 10000 * 5 / 500 = 100
     assert qty == 100
+    assert "fallback" in note.lower()
+
+
+def test_tc_margin_sizing_refuses_on_bad_token_instead_of_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale/invalid Kite token must refuse to size, not silently fall back.
+
+    The 2026-09-17 incident mis-sized a real order this way: order_margins
+    failed on a bad token and the fallback leverage estimate placed anyway.
+    """
+    from kiteconnect.exceptions import TokenException
+
+    class _BadTokenKite(_FakeKite):
+        def order_margins(self, params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            raise TokenException("Incorrect `api_key` or `access_token`.")
+
+    ex = _executor(
+        tmp_path,
+        sizing_mode="margin",
+        margin_budget_inr=10_000,
+        fallback_leverage=5.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: _BadTokenKite())
+    with pytest.raises(SizingRefusedError, match="token invalid/expired"):
+        ex.size_quantity(symbol="AAA", price=500.0, side="BUY")
+
+
+def test_tc_margin_sizing_still_falls_back_on_non_token_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-auth failures (network blips, bad params) keep the old fallback."""
+
+    class _FlakyKite(_FakeKite):
+        def order_margins(self, params: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            raise RuntimeError("temporary network error")
+
+    ex = _executor(
+        tmp_path,
+        sizing_mode="margin",
+        margin_budget_inr=10_000,
+        fallback_leverage=5.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: _FlakyKite())
+    qty, note = ex.size_quantity(symbol="AAA", price=500.0, side="BUY")
+    assert qty == 100  # 10000 * 5 / 500
     assert "fallback" in note.lower()
 
 

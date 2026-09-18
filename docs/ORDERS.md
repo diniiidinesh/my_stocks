@@ -43,8 +43,21 @@ qty = floor(TRADE_MARGIN_INR / margin_per_share)
 Example: ₹10,000 budget, stock needs ₹2,000 margin/share at its MIS leverage → **5 shares**. Notional = qty × price (can exceed ₹10k when leveraged).
 
 - Live / dry_run with token: margin from Kite  
-- Offline dry_run: `qty ≈ floor(TRADE_MARGIN_INR × TRADE_FALLBACK_LEVERAGE / price)`  
+- Offline dry_run (no Kite credentials configured at all): `qty ≈ floor(TRADE_MARGIN_INR × TRADE_FALLBACK_LEVERAGE / price)`  
 - `TRADE_SIZING=fixed`: always `TRADE_QTY`
+
+**A rejected/expired token does not use the offline fallback — it refuses to
+trade.** These look similar (both come from a failed `order_margins` call) but
+are not the same: no-credentials-configured is expected in `dry_run`/offline
+testing, while a token Kite itself rejects mid-session means auth is broken
+*right now* and an approximate leverage guess could size a real order wrong
+(this happened on 2026-09-17 — see
+[RCA-2026-09-17.md](RCA-2026-09-17.md)). `watch` catches this, alerts
+`🔑 <symbol> trade skipped: ...` to Telegram, and skips just that one trade —
+alerts and the rest of the watcher keep running. `order`/`size` raise a plain
+CLI error instead. `watch` also checks the token *before* connecting at all
+(`kite.profile()`) and exits with a Telegram alert if it's already invalid at
+startup, rather than discovering it deep inside a trade.
 
 **Do not comment out `TRADE_QTY=1` hoping to unlock ₹10k size.** That variable is ignored when `TRADE_SIZING=margin` (the default). **`TRADE_SIZING=margin` can still place 1 share** — that is the calculated result when Kite’s margin for **1 share** is already most of `TRADE_MARGIN_INR`:
 

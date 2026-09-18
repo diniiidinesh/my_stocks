@@ -2,7 +2,14 @@ services:
   nse-alert:
     build: .
     container_name: nse-alert
-    restart: unless-stopped
+    # unless-stopped retries forever, which is wrong for a credential error
+    # that cannot self-heal (e.g. an expired Kite token) — that produced a
+    # silent 13-restart crash loop on 2026-09-18 with no alert. Three
+    # attempts then stop is correct: a stopped container is far more visible
+    # (`docker compose ps` shows Exited) than one stuck Restarting forever.
+    # `watch` itself now alerts + exits non-zero on a bad token before this
+    # limit is even hit — see docs/RCA-2026-09-17.md P4.
+    restart: on-failure:3
     # Match the host `ubuntu` user (uid/gid 1000 on the Lightsail VM) so the
     # container and host-side cron both write .nse_alert/ as the same owner.
     user: "${UID:-1000}:${GID:-1000}"

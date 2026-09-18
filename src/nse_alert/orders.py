@@ -16,6 +16,17 @@ NSE_TICK = 0.05
 _TERMINAL_ORDER_STATUSES = frozenset({"COMPLETE", "CANCELLED", "REJECTED"})
 
 
+class SizingRefusedError(RuntimeError):
+    """Raised instead of silently falling back to approximate sizing.
+
+    A bad/expired Kite token makes ``order_margins`` fail the same way a
+    network blip does, but the two must not be treated the same: sizing off
+    an approximate leverage guess while auth is broken produced a real
+    mis-sized order on 2026-09-17 (see docs/RCA-2026-09-17.md). Callers
+    should alert and skip the trade rather than place it anyway.
+    """
+
+
 def parse_order_margins_payload(detail: Any) -> dict[str, Any]:
     """Unwrap Kite ``order_margins`` into a single order row.
 
@@ -441,6 +452,14 @@ class OrderExecutor:
             )
             return qty, note
         except Exception as exc:  # noqa: BLE001
+            from kiteconnect.exceptions import TokenException
+
+            if isinstance(exc, TokenException):
+                raise SizingRefusedError(
+                    f"Kite token invalid/expired ({exc}) — refusing to size off an "
+                    "approximate fallback while auth is broken. Run the daily "
+                    "login, then retry."
+                ) from exc
             # Approximate: budget * leverage / price
             qty = max(1, int((budget * self.fallback_leverage) // px))
             notional = qty * px

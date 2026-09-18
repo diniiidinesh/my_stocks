@@ -14,7 +14,7 @@ from nse_alert.engine import AlertEngine, parse_thresholds
 from nse_alert.lock import acquire_single_instance, release_single_instance
 from nse_alert.feed import KiteFeed, MockFeed
 from nse_alert.notify import TelegramNotifier, build_notifier
-from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest
+from nse_alert.orders import OrderBook, OrderExecutor, OrderRequest, SizingRefusedError
 from nse_alert.report import (
     build_day_report,
     format_day_report,
@@ -115,6 +115,24 @@ def watch_cmd(
             "(paid Kite Connect plan for WebSocket)."
         )
 
+    if use_kite:
+        from kiteconnect.exceptions import TokenException
+
+        try:
+            _kite_client(settings.kite_api_key, settings.kite_access_token).profile()
+        except TokenException as exc:
+            msg = (
+                f"🔑 Kite token expired or invalid — watcher cannot start.\n{exc}\n"
+                "Run the daily login, then: docker compose up -d --build --force-recreate"
+            )
+            logger.error("%s", msg)
+            if settings.telegram_configured:
+                TelegramNotifier(
+                    settings.telegram_bot_token, settings.telegram_chat_id
+                ).send_text(msg)
+            release_single_instance(lock_fh)
+            raise SystemExit(1)
+
     instruments = build_universe(
         min_turnover_cr=settings.min_turnover_cr,
         min_price=settings.min_price,
@@ -189,13 +207,20 @@ def watch_cmd(
             direction=alert.direction, threshold_pct=alert.threshold_pct
         ):
             return
-        req = executor.build_request_from_alert(
-            symbol=alert.symbol,
-            direction=alert.direction,
-            threshold_pct=alert.threshold_pct,
-            change_pct=alert.change_pct,
-            entry_ltp=alert.ltp,
-        )
+        try:
+            req = executor.build_request_from_alert(
+                symbol=alert.symbol,
+                direction=alert.direction,
+                threshold_pct=alert.threshold_pct,
+                change_pct=alert.change_pct,
+                entry_ltp=alert.ltp,
+            )
+        except SizingRefusedError as exc:
+            msg = f"🔑 {alert.symbol} trade skipped: {exc}"
+            logger.error("%s", msg)
+            if tg:
+                tg.send_text(msg)
+            return
         mode = executor.mode
         if mode == "confirm":
             pending = book.add_pending(
@@ -551,7 +576,10 @@ def _cli_size_quantity(
             "the order. Commenting out TRADE_QTY=1 does not enable 10k sizing — "
             "set TRADE_SIZING=margin (default) instead."
         )
-    return executor.size_quantity(symbol=symbol, price=px, side=side)  # type: ignore[arg-type]
+    try:
+        return executor.size_quantity(symbol=symbol, price=px, side=side)  # type: ignore[arg-type]
+    except SizingRefusedError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _ensure_mock_demo(instruments: list[Instrument]) -> list[Instrument]:
@@ -665,7 +693,10 @@ def size_cmd(symbol: str, price: float | None) -> None:
                     )
             except (TypeError, ValueError):
                 pass
-    qty, note = executor.size_quantity(symbol=sym, price=px, side="BUY")
+    try:
+        qty, note = executor.size_quantity(symbol=sym, price=px, side="BUY")
+    except SizingRefusedError as exc:
+        raise click.ClickException(str(exc)) from exc
     click.echo(f"qty={qty}")
     click.echo(f"note={note}")
 

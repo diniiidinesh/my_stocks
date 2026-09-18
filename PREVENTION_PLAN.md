@@ -4,6 +4,17 @@ Phase 2 of the [2026-09-17 RCA](docs/RCA-2026-09-17.md). Phase 1
 ([`FIX_PLAN.md`](FIX_PLAN.md), P0–P4) fixed the specific bugs. **This plan fixes
 the reason nobody noticed them.**
 
+> **Status.**
+>
+> | Item | Status |
+> |------|--------|
+> | P1 — single-instance lock | **Done** — PR #21, merged; verified live (second `watch` rejected while held, lock releases on process exit) |
+> | P2 — alert on dead confirm listener | Open |
+> | P3 — notify on order expiry | Open |
+> | P4 — validate Kite token at startup | **Done** — `watch` checks the token before any setup and exits+alerts on `TokenException`; mid-session sizing failures on a bad token now refuse+alert instead of silently falling back to an approximate estimate; `docker-compose.yml` restart policy changed to `on-failure:3` |
+> | P5 — alert when the market feed drops | Open |
+> | P6 — daily heartbeat | Open |
+
 Every incident so far has the same shape: something stopped working, the app
 logged it locally, and the operator found out hours later — or only because
 they went looking. Four instances in two days:
