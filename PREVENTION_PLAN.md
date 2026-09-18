@@ -9,7 +9,7 @@ the reason nobody noticed them.**
 > | Item | Status |
 > |------|--------|
 > | P1 — single-instance lock | **Done** — PR #21, merged; verified live (second `watch` rejected while held, lock releases on process exit) |
-> | P2 — alert on dead confirm listener | Open |
+> | P2 — alert on dead confirm listener | **Done** — `TelegramConfirmListener` alerts on the 3rd consecutive `getUpdates` failure, edge-triggered, with exponential backoff |
 > | P3 — notify on order expiry | Open |
 > | P4 — validate Kite token at startup | **Done** — `watch` checks the token before any setup and exits+alerts on `TokenException`; mid-session sizing failures on a bad token now refuse+alert instead of silently falling back to an approximate estimate; `docker-compose.yml` restart policy changed to `on-failure:3` |
 > | P5 — alert when the market feed drops | Open |

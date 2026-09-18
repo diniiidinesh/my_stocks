@@ -339,6 +339,7 @@ def watch_cmd(
             chat_id=settings.telegram_chat_id,
             on_confirm=_on_confirm,
             on_cancel=_on_cancel,
+            on_health_alert=tg.send_text if tg else None,
         )
         confirm_listener.start()
 

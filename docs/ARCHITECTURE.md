@@ -56,7 +56,7 @@ Nifty 500 ∪ Smallcap 250
 | `report.py` | EOD UP/DOWN counts, close %, hold-level counts, gaps |
 | `notify/telegram.py` | Console + Telegram text + document upload |
 | `orders.py` | Order book, margin sizing, dry-run/confirm/auto, SL-Limit, trail |
-| `confirm_bot.py` | Telegram `/confirm` / `/cancel` listener (groups + DMs) |
+| `confirm_bot.py` | Telegram `/confirm` / `/cancel` listener (groups + DMs); alerts + backs off after 3 consecutive `getUpdates` failures |
 | `lock.py` | Single-instance `flock` on `watch` so a second watcher can't 409-lock Telegram (see [RCA-2026-09-17.md](RCA-2026-09-17.md), Incident A) |
 | `ipv4.py` | Optional IPv4-only DNS so Kite sees the Elastic IP |
 | `login_ui.py` | Local OAuth / paste-token UI |

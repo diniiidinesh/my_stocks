@@ -151,6 +151,14 @@ looks broken from the Telegram side.
 On 2026-09-17 this cost four orders and produced 6,062 `409`s in one day before
 anyone noticed. Full write-up: [RCA-2026-09-17.md](RCA-2026-09-17.md).
 
+Two independent guards now exist so this specific failure can't repeat
+silently: a second `watch` refuses to start at all (single-instance lock —
+see `nse_alert/lock.py`), and if the listener still goes unhealthy for any
+other reason, it sends one Telegram alert after 3 consecutive `getUpdates`
+failures (`⚠️ Confirm listener is down — ...`), backing off instead of
+hammering a dead poll. You should never again have to notice this by counting
+409s in a log.
+
 **Check before you trust a confirm run:**
 
 ```bash

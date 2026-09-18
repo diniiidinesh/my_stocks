@@ -83,6 +83,12 @@ class TelegramConfirmListener:
     group. Slash commands work in groups even with BotFather privacy on.
     """
 
+    #: Consecutive poll failures before we alert. 6,062 WARNINGs scrolled
+    #: past unnoticed on 2026-09-17 — this is the anti-pattern being fixed.
+    FAILURE_ALERT_THRESHOLD = 3
+    #: Once alerted, back off exponentially instead of hammering a dead poll.
+    MAX_BACKOFF_SEC = 300.0
+
     def __init__(
         self,
         *,
@@ -91,6 +97,7 @@ class TelegramConfirmListener:
         on_confirm: Callable[[str], None],
         on_cancel: Callable[[str], None] | None = None,
         poll_sec: float = 2.0,
+        on_health_alert: Callable[[str], None] | None = None,
     ) -> None:
         self.bot_token = bot_token
         self.chat_id = normalize_chat_id(chat_id)
@@ -98,10 +105,18 @@ class TelegramConfirmListener:
         self.on_confirm = on_confirm
         self.on_cancel = on_cancel
         self.poll_sec = poll_sec
+        #: Called with one alert message the moment the listener becomes
+        #: unhealthy (edge-triggered — not called again until it recovers).
+        #: Typically wired to TelegramNotifier.send_text: sendMessage has no
+        #: single-consumer restriction, so it still works while getUpdates
+        #: is 409-locked. Never crashes the poller if it raises.
+        self.on_health_alert = on_health_alert
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._offset = 0
         self._webhook_cleared = False
+        self._consecutive_failures = 0
+        self._alerted = False
 
     def start(self) -> None:
         self._stop.clear()
@@ -131,6 +146,31 @@ class TelegramConfirmListener:
         else:
             self._webhook_cleared = True
 
+    def _record_failure(self, detail: str) -> float:
+        """Update failure state; returns how long to sleep before retrying."""
+        self._consecutive_failures += 1
+        if self._consecutive_failures >= self.FAILURE_ALERT_THRESHOLD and not self._alerted:
+            msg = (
+                "⚠️ Confirm listener is down — order confirmations will NOT "
+                f"be received.\n{detail}\n"
+                "Check: exactly one `nse-alert watch` may run. See docs/ORDERS.md."
+            )
+            logger.error("%s", msg)
+            self._alerted = True
+            if self.on_health_alert:
+                try:
+                    self.on_health_alert(msg)
+                except Exception:  # noqa: BLE001 — alerting must never crash the poller
+                    logger.exception("Failed to send confirm-listener health alert")
+        if self._consecutive_failures < self.FAILURE_ALERT_THRESHOLD:
+            return self.poll_sec
+        extra = self._consecutive_failures - self.FAILURE_ALERT_THRESHOLD
+        return min(self.MAX_BACKOFF_SEC, self.poll_sec * (2**extra))
+
+    def _record_success(self) -> None:
+        self._consecutive_failures = 0
+        self._alerted = False
+
     def _run(self) -> None:
         url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
         while not self._stop.is_set():
@@ -148,15 +188,16 @@ class TelegramConfirmListener:
                 payload = resp.json()
             except httpx.HTTPError as exc:
                 logger.warning("Telegram poll failed: %s", exc)
-                time.sleep(self.poll_sec)
+                time.sleep(self._record_failure(str(exc)))
                 continue
 
             if not payload.get("ok", True):
                 desc = payload.get("description") or payload
                 logger.warning("Telegram getUpdates error: %s", desc)
-                time.sleep(self.poll_sec)
+                time.sleep(self._record_failure(str(desc)))
                 continue
 
+            self._record_success()
             for update in payload.get("result", []):
                 self._offset = max(self._offset, int(update.get("update_id", 0)) + 1)
                 self._handle(update)
