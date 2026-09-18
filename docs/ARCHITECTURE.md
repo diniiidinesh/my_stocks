@@ -57,6 +57,7 @@ Nifty 500 ∪ Smallcap 250
 | `notify/telegram.py` | Console + Telegram text + document upload |
 | `orders.py` | Order book, margin sizing, dry-run/confirm/auto, SL-Limit, trail |
 | `confirm_bot.py` | Telegram `/confirm` / `/cancel` listener (groups + DMs) |
+| `lock.py` | Single-instance `flock` on `watch` so a second watcher can't 409-lock Telegram (see [RCA-2026-09-17.md](RCA-2026-09-17.md), Incident A) |
 | `ipv4.py` | Optional IPv4-only DNS so Kite sees the Elastic IP |
 | `login_ui.py` | Local OAuth / paste-token UI |
 | `envfile.py` | `.env` read/write helpers |
@@ -76,6 +77,7 @@ Nifty 500 ∪ Smallcap 250
 
 | File / dir | Purpose |
 |------------|---------|
+| `watch.lock` | Single-instance lock (`flock`) — holds the PID of the running watcher |
 | `fired.json` | Today’s dedupe keys + alert events |
 | `report-YYYY-MM-DD.txt` | EOD alert report |
 | `orders.json` | Pending / placed / open SL tracks |
