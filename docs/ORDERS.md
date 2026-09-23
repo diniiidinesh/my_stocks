@@ -21,6 +21,8 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_STOP_WAIT_SEC` | `20` | Wait for entry fill before SL (live) |
 | `TRADE_TRAIL_BREAKEVEN` | `true` | Move SL to entry when LTP rises enough |
 | `TRADE_TRAIL_BREAKEVEN_PCT` | `2` | Arm cost-to-cost trail at entry × 1.02 |
+| `TRADE_EXIT_ON_UPPER_CIRCUIT` | `true` | Exit at market when LTP hits the upper-circuit band |
+| `TRADE_UPPER_CIRCUIT_PCT` | `20` | Circuit band (% of prev close) that triggers the exit |
 | `TRADE_MAX_ORDERS_PER_DAY` | `10` | Entry-order cap (stops excluded) |
 
 ## Flow
@@ -31,8 +33,32 @@ Optional. Alerts work with `TRADE_MODE=off`.
 4. **Wait** for fill (`COMPLETE`, up to `TRADE_STOP_WAIT_SEC`); use **average_price** for the stop
 5. Place **SL-Limit SELL** (trigger 2% under fill, limit a few ticks lower)
 6. On each tick: if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), **modify** stop to entry (cost-to-cost)
+7. On each tick: if LTP is ≥ `TRADE_UPPER_CIRCUIT_PCT` (default 20%) above **prev close**, cancel the resting stop and **exit at market** immediately
 
 Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY`. One open position per symbol/day.
+
+### Upper-circuit exit
+
+The bot enters on `THRESHOLD_PCT` levels like **11%/13%** — well under the
+**20%** band where most NSE mid/small caps circuit-lock (some names use
+narrower bands: 5/10%; a few liquid large caps have none). Once a stock
+actually locks at its upper circuit there are no sellers left, so a resting
+SL sitting near entry has nothing to fill against — you can be stuck holding
+into the next session with no way to exit at that price.
+
+So on every tick, in addition to the breakeven trail, the executor checks
+`change_pct = (LTP / prev_close − 1) × 100` for any open position. The
+moment it reaches `TRADE_UPPER_CIRCUIT_PCT`, it cancels the SL-Limit stop (if
+live) and places a **market SELL** for the full position — trading the
+remaining slippage for certainty of a fill before the circuit locks and
+liquidity disappears. This fires independent of the SL/breakeven trail and
+closes the position in `orders.json` (`status=closed`,
+`closed_reason=upper_circuit_exit`).
+
+Set `TRADE_UPPER_CIRCUIT_PCT` to match a specific symbol's actual band (NSE
+circuit filters are published per-scrip, not a single market-wide number) or
+`TRADE_EXIT_ON_UPPER_CIRCUIT=false` to disable it and rely on the SL/trail
+alone.
 
 ### Sizing
 

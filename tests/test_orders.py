@@ -205,6 +205,7 @@ class _FakeKite:
     def __init__(self, *, fill_price: float = 1500.0, fill_qty: int = 1) -> None:
         self.calls: list[dict[str, Any]] = []
         self.modifies: list[dict[str, Any]] = []
+        self.cancels: list[dict[str, Any]] = []
         self._n = 0
         self.fill_price = fill_price
         self.fill_qty = fill_qty
@@ -227,6 +228,10 @@ class _FakeKite:
     def modify_order(self, **params: Any) -> str:
         self.modifies.append(params)
         return "MOD-1"
+
+    def cancel_order(self, **params: Any) -> str:
+        self.cancels.append(params)
+        return "CANCEL-1"
 
 
 def test_tc_live_mock_auto_places_market_then_sl_limit(
@@ -680,6 +685,64 @@ def test_tc_trail_breakeven_dry_run(tmp_path: Path) -> None:
     assert msg is not None and "cost" in msg.lower()
     pos = ex.book.get_position("SBIN") if ex.book else None
     assert pos is not None and pos["breakeven_armed"] is True
+
+
+def test_tc_upper_circuit_exit_dry_run(tmp_path: Path) -> None:
+    ex = _executor(tmp_path, exit_on_upper_circuit=True, upper_circuit_pct=20.0)
+    req = _buy_req("TATAMOTORS")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+
+    assert ex.manage_upper_circuit_exit("TATAMOTORS", 118.0, prev_close=100.0) is None
+    msg = ex.manage_upper_circuit_exit("TATAMOTORS", 120.0, prev_close=100.0)
+    assert msg is not None and "upper circuit" in msg.lower()
+    pos = ex.book.get_position("TATAMOTORS") if ex.book else None
+    assert pos is None  # closed, no longer an open position
+
+    # Once closed, further ticks are a no-op (no duplicate exit orders).
+    assert ex.manage_upper_circuit_exit("TATAMOTORS", 125.0, prev_close=100.0) is None
+
+
+def test_tc_upper_circuit_exit_live_cancels_stop_and_sells_market(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeKite(fill_price=100.0)
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        exit_on_upper_circuit=True,
+        upper_circuit_pct=20.0,
+        stop_wait_sec=1.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    req = _buy_req("ADANIPOWER")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+
+    msg = ex.manage_upper_circuit_exit("ADANIPOWER", 120.0, prev_close=100.0)
+    assert msg is not None and "ADANIPOWER" in msg
+    assert len(fake.cancels) == 1
+    assert fake.cancels[0]["order_id"] == sl.order_id
+    market_sells = [
+        c
+        for c in fake.calls
+        if c["transaction_type"] == "SELL" and c["order_type"] == "MARKET"
+    ]
+    assert len(market_sells) == 1
+    pos = ex.book.get_position("ADANIPOWER") if ex.book else None
+    assert pos is None
+
+
+def test_tc_upper_circuit_exit_disabled_is_noop(tmp_path: Path) -> None:
+    ex = _executor(tmp_path, exit_on_upper_circuit=False, upper_circuit_pct=20.0)
+    req = _buy_req("IRFC")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=50.0)
+    assert entry.ok and sl is not None and sl.ok
+    assert ex.manage_upper_circuit_exit("IRFC", 65.0, prev_close=50.0) is None
+    pos = ex.book.get_position("IRFC") if ex.book else None
+    assert pos is not None  # still open — rule is off
 
 
 def test_tc_margin_sizing_uses_order_margins(

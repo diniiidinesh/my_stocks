@@ -216,6 +216,15 @@ class OrderBook:
         }
         self._save()
 
+    def close_position(self, symbol: str, *, reason: str = "closed") -> None:
+        pos = self._data.get("positions", {}).get(symbol.upper())
+        if not pos:
+            return
+        pos["status"] = "closed"
+        pos["closed_reason"] = reason
+        pos["closed_at"] = datetime.now(timezone.utc).isoformat()
+        self._save()
+
     def get_position(self, symbol: str) -> dict[str, Any] | None:
         raw = self._data.get("positions", {}).get(symbol.upper())
         if not raw or raw.get("status") != "open":
@@ -365,6 +374,8 @@ class OrderExecutor:
         stop_wait_sec: float = 20.0,
         trail_breakeven: bool = True,
         trail_breakeven_pct: float = 2.0,
+        exit_on_upper_circuit: bool = True,
+        upper_circuit_pct: float = 20.0,
         sizing_mode: str = "margin",  # margin | fixed
         margin_budget_inr: float = 10_000.0,
         fallback_leverage: float = 5.0,
@@ -387,6 +398,8 @@ class OrderExecutor:
         self.stop_wait_sec = max(1.0, float(stop_wait_sec))
         self.trail_breakeven = trail_breakeven
         self.trail_breakeven_pct = abs(float(trail_breakeven_pct))
+        self.exit_on_upper_circuit = exit_on_upper_circuit
+        self.upper_circuit_pct = abs(float(upper_circuit_pct))
         mode_raw = (sizing_mode or "margin").strip().lower()
         self.sizing_mode = mode_raw if mode_raw in {"margin", "fixed"} else "margin"
         self.margin_budget_inr = max(0.0, float(margin_budget_inr))
@@ -699,6 +712,68 @@ class OrderExecutor:
             logger.info(msg)
             return msg
         return None
+
+    def manage_upper_circuit_exit(
+        self, symbol: str, ltp: float, prev_close: float
+    ) -> str | None:
+        """Exit an open position at market once LTP hits the upper-circuit band.
+
+        Most NSE mid/small caps circuit at +20% of prev close — well above the
+        11/13% entry thresholds this bot buys on. Once a stock locks upper
+        there are no sellers left, so a resting SL far below entry will not
+        fill; this fires a market SELL as the band is crossed instead, while
+        there is still buying interest to exit into.
+        """
+        if not self.book or not self.exit_on_upper_circuit:
+            return None
+        pos = self.book.get_position(symbol)
+        if not pos:
+            return None
+        if prev_close <= 0 or ltp <= 0:
+            return None
+        change_pct = (ltp / prev_close - 1.0) * 100.0
+        # Float tolerance: e.g. 120/100 - 1 lands at 19.999999999999996, not 20.0.
+        if change_pct < self.upper_circuit_pct - 1e-6:
+            return None
+
+        qty = max(1, int(pos.get("quantity") or 1))
+        stop_id = pos.get("stop_order_id")
+        if stop_id and self.mode != "dry_run" and not str(stop_id).startswith("DRY-"):
+            try:
+                kite = self._kite()
+                kite.cancel_order(variety=kite.VARIETY_REGULAR, order_id=str(stop_id))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not cancel stop %s before circuit exit on %s: %s",
+                    stop_id,
+                    symbol,
+                    exc,
+                )
+
+        exit_req = OrderRequest(
+            symbol=symbol,
+            side="SELL",
+            quantity=qty,
+            product=str(pos.get("product") or self.product),
+            order_type="MARKET",
+            price=None,
+            trigger_price=None,
+            market_protection=self.market_protection,
+            tag="nsecirc",
+            reason=(
+                f"upper circuit exit: LTP {change_pct:+.2f}% vs prev close "
+                f"(>= {self.upper_circuit_pct:g}% band)"
+            ),
+        )
+        result = self.place(exit_req, toward_daily_cap=False)
+        self.book.close_position(symbol, reason="upper_circuit_exit")
+        msg = (
+            f"🔺 {symbol} hit upper circuit ({change_pct:+.2f}% ≥ "
+            f"{self.upper_circuit_pct:g}%) — exiting {qty} at market "
+            f"({result.message})"
+        )
+        logger.info(msg)
+        return msg
 
     def build_request_from_alert(
         self,

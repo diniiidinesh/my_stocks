@@ -9,6 +9,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | ASM tag | Zerodha RMS sheet (not a Kite API) |
 | Test trades | BUY on **+13% UP** (MIS) + **2% SL-Limit**, margin-sized ≈ **₹10k** |
 | Cost-to-cost SL | Trail stop to entry after +2% from fill |
+| Upper-circuit exit | Market SELL when LTP hits +20% of prev close |
 | EOD alert report | Close % per scrip + hold-level counts |
 | EOD TA screener | Daily chart → Excel + Telegram (after 15:40 IST) |
 | Cloud | AWS Lightsail Mumbai (Oracle free if capacity allows) |
