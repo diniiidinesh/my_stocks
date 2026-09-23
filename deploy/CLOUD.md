@@ -203,7 +203,8 @@ Kite tokens expire every trading day. Pick one:
 
 ```bash
 # SG: allow inbound TCP 8765 from your home IP only
-docker compose run --rm --service-ports nse-alert nse-alert login --no-browser
+cd /opt/nse-alert
+uv run nse-alert login --no-browser
 # Open http://ELASTIC_IP:8765/ in your laptop browser
 ```
 
@@ -215,7 +216,25 @@ uv run nse-alert login
 # copy access token
 
 # server
-docker compose run --rm nse-alert nse-alert set-token PASTE_TOKEN_HERE
+cd /opt/nse-alert
+uv run nse-alert set-token PASTE_TOKEN_HERE
+```
+
+**Run `login`/`set-token` with `uv run` on the host, never via
+`docker compose run`.** `docker-compose.yml` bind-mounts `.env` **read-only**
+into the container (`./.env:/app/.env:ro`) — deliberately, so the running
+`watch` process can't accidentally rewrite its own config — but that means a
+token write attempted *inside* the container always fails with
+`OSError: [Errno 30] Read-only file system: '.env'`, silently leaving the old
+(likely expired) token in place. `uv run` on the host writes the real file
+on disk, which the container then picks up read-only, in the right direction.
+If you ever see that `Errno 30` error, that's what happened — rerun the same
+command with `uv run` instead of `docker compose run`, then recreate the
+container so it re-reads `.env`:
+
+```bash
+uv run nse-alert set-token PASTE_TOKEN_HERE
+docker compose up -d --force-recreate   # picks up the new .env; no --build needed
 ```
 
 Note: **order** API calls must originate from the **whitelisted static IP**.
@@ -280,7 +299,9 @@ cd /opt/nse-alert
 git pull origin main          # optional — only when you want updates
 
 # 1. refresh the daily Kite token (expires every morning)
-docker compose run --rm nse-alert nse-alert set-token <ACCESS_TOKEN>
+#    Run with `uv run` on the HOST — `docker compose run` fails here because
+#    .env is bind-mounted read-only into the container (see "Daily login" above).
+uv run nse-alert set-token <ACCESS_TOKEN>
 
 # 2. (re)start the watcher — idempotent, never creates a second one
 #    --build is required whenever you pulled code above; without it the

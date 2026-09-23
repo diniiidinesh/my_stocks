@@ -23,7 +23,9 @@ High-level map of the codebase. Prefer this over scrolling `src/` blindly.
       │                                            │
       │                                            ├─► Notifier.send (console / Telegram)
       │                                            ├─► OrderExecutor (optional MIS + SL)
-      │                                            └─► manage_open_stops (cost-to-cost trail)
+      │                                            ├─► manage_open_stops (cost-to-cost trail)
+      │                                            └─► manage_upper_circuit_exit (market exit
+      │                                                at real/fallback circuit price)
       ▼
  on exit / `report` ──► build_day_report (+ EOD closes) → file + optional Telegram
 ```
@@ -55,7 +57,7 @@ Nifty 500 ∪ Smallcap 250
 | `feed.py` | `MockFeed`, `KiteFeed` WebSocket; alerts on repeated reconnects, exits the watcher if reconnection is abandoned |
 | `report.py` | EOD UP/DOWN counts, close %, hold-level counts, gaps |
 | `notify/telegram.py` | Console + Telegram text + document upload |
-| `orders.py` | Order book, margin sizing, dry-run/confirm/auto, SL-Limit, trail; alerts once per pending-order expiry |
+| `orders.py` | Order book, margin sizing, dry-run/confirm/auto, SL-Limit, breakeven trail, upper-circuit market exit (per-symbol Kite `quote()` limit, falls back to a flat %); alerts once per pending-order expiry |
 | `confirm_bot.py` | Telegram `/confirm` / `/cancel` listener (groups + DMs); alerts + backs off after 3 consecutive `getUpdates` failures |
 | `lock.py` | Single-instance `flock` on `watch` so a second watcher can't 409-lock Telegram (see [RCA-2026-09-17.md](RCA-2026-09-17.md), Incident A) |
 | `ipv4.py` | Optional IPv4-only DNS so Kite sees the Elastic IP |
