@@ -32,8 +32,9 @@ Optional. Alerts work with `TRADE_MODE=off`.
 3. Place **MARKET BUY** (MIS)
 4. **Wait** for fill (`COMPLETE`, up to `TRADE_STOP_WAIT_SEC`); use **average_price** for the stop
 5. Place **SL-Limit SELL** (trigger 2% under fill, limit a few ticks lower)
-6. On each tick: if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), **modify** stop to entry (cost-to-cost)
-7. On each tick: if LTP is ≥ `TRADE_UPPER_CIRCUIT_PCT` (default 20%) above **prev close**, cancel the resting stop and **exit at market** immediately
+6. Look up the symbol's **actual** upper-circuit price via Kite `quote()` and store it on the position (falls back to `TRADE_UPPER_CIRCUIT_PCT` of prev close if unavailable)
+7. On each tick: if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), **modify** stop to entry (cost-to-cost)
+8. On each tick: if LTP reaches the circuit price from step 6, cancel the resting stop and **exit at market** immediately
 
 Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY`. One open position per symbol/day.
 
@@ -41,24 +42,41 @@ Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY`. One open position per
 
 The bot enters on `THRESHOLD_PCT` levels like **11%/13%** — well under the
 **20%** band where most NSE mid/small caps circuit-lock (some names use
-narrower bands: 5/10%; a few liquid large caps have none). Once a stock
+narrower bands: 2/5/10%; a few liquid large caps have none). Once a stock
 actually locks at its upper circuit there are no sellers left, so a resting
 SL sitting near entry has nothing to fill against — you can be stuck holding
 into the next session with no way to exit at that price.
 
-So on every tick, in addition to the breakeven trail, the executor checks
-`change_pct = (LTP / prev_close − 1) × 100` for any open position. The
-moment it reaches `TRADE_UPPER_CIRCUIT_PCT`, it cancels the SL-Limit stop (if
-live) and places a **market SELL** for the full position — trading the
-remaining slippage for certainty of a fill before the circuit locks and
-liquidity disappears. This fires independent of the SL/breakeven trail and
-closes the position in `orders.json` (`status=closed`,
-`closed_reason=upper_circuit_exit`).
+**Per-symbol circuit price, not a flat guess.** Circuit bands are set per
+scrip, not market-wide, so a single `TRADE_UPPER_CIRCUIT_PCT` guess is wrong
+for most names — a 10%-band stock would already be locked, with liquidity
+gone, well before a flat 20% check ever fires. So right after an entry fills
+(`place_entry_with_stop`), the executor calls Kite `quote()` once for that
+symbol and reads its actual `upper_circuit_limit`, storing it on the
+position in `orders.json` (`circuit_limit`). This is a **one-time lookup at
+entry**, not a per-tick poll — Kite doesn't push circuit limits over the
+WebSocket ticker (`on_ticks` only gets `last_price`), and the band is fixed
+for the day in the vast majority of cases, so polling it every tick would
+just burn the quote rate limit for no benefit. If the lookup fails (no
+credentials, an API error, or Kite returns no `upper_circuit_limit` for that
+name), the position falls back to the flat `TRADE_UPPER_CIRCUIT_PCT` band
+instead of silently not exiting at all.
 
-Set `TRADE_UPPER_CIRCUIT_PCT` to match a specific symbol's actual band (NSE
-circuit filters are published per-scrip, not a single market-wide number) or
-`TRADE_EXIT_ON_UPPER_CIRCUIT=false` to disable it and rely on the SL/trail
-alone.
+Then on every tick, in addition to the breakeven trail, the executor checks
+any open position's LTP against `circuit_limit` (or, in the fallback case,
+`change_pct = (LTP / prev_close − 1) × 100` against `TRADE_UPPER_CIRCUIT_PCT`).
+The moment it's reached, it cancels the SL-Limit stop (if live) and places a
+**market SELL** for the full position — trading the remaining slippage for
+certainty of a fill before the circuit locks and liquidity disappears. This
+fires independent of the SL/breakeven trail and closes the position in
+`orders.json` (`status=closed`, `closed_reason=upper_circuit_exit`). Telegram
+messages and the `orders.json reason` say which band was used
+(`real circuit ₹…` vs `…% fallback band`), so you can tell them apart.
+
+Set `TRADE_UPPER_CIRCUIT_PCT` as a sane fallback for when the Kite lookup
+can't run (e.g. `dry_run` without credentials), or
+`TRADE_EXIT_ON_UPPER_CIRCUIT=false` to disable the whole rule and rely on the
+SL/trail alone.
 
 ### Sizing
 
