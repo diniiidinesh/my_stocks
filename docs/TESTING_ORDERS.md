@@ -48,6 +48,12 @@ uv run pytest -q tests/test_orders.py tests/test_engine.py tests/test_report.py
 | TC-SIZE-03 | CLI `order` without `--qty` | Margin size, not TRADE_QTY=1 | `test_cli_order_without_qty_uses_margin_not_trade_qty` |
 | TC-SIZE-04 | High margin/share with `TRADE_SIZING=margin` | qty=1 is calculated, note explains | `test_tc_margin_sizing_qty_one_when_margin_per_share_high` |
 | TC-BOOK-01 | New calendar day | `placed_count` resets | `test_tc_book_resets_on_new_calendar_day` |
+| TC-CIRCUIT-01 | LTP reaches flat `TRADE_UPPER_CIRCUIT_PCT` (no Kite quote limit) | Stop cancelled, market SELL placed, position closed | `test_tc_upper_circuit_exit_dry_run` |
+| TC-CIRCUIT-02 | Live mode, LTP reaches the flat band | Fake Kite `cancel_order` + market SELL called | `test_tc_upper_circuit_exit_live_cancels_stop_and_sells_market` |
+| TC-CIRCUIT-03 | `TRADE_EXIT_ON_UPPER_CIRCUIT=false` | No-op regardless of LTP; position stays open | `test_tc_upper_circuit_exit_disabled_is_noop` |
+| TC-CIRCUIT-04 | Kite `quote()` returns a real `upper_circuit_limit` narrower than the flat % (e.g. 10% band vs 20% flat) | Exits at the **real** price, not the flat fallback | `test_tc_upper_circuit_fetches_and_uses_real_kite_limit` |
+| TC-CIRCUIT-05 | Kite reachable but `quote()` has no `upper_circuit_limit` field | Falls back to flat `TRADE_UPPER_CIRCUIT_PCT` | `test_tc_upper_circuit_falls_back_to_pct_when_kite_quote_has_no_limit` |
+| TC-CIRCUIT-06 | No Kite credentials configured | `fetch_upper_circuit_limit` returns `None` quietly (no exception, no log spam) | `test_tc_upper_circuit_fetch_returns_none_without_credentials` |
 | TC-REPORT-01 | EOD close % + hold counts | Close section + held/fired | `tests/test_report.py` |
 
 ### Local mock end-to-end (no Kite money)
@@ -101,6 +107,7 @@ You must run these on your machine / Lightsail VM with a real Kite session.
 | TC-HAND-09 | SL trigger behaviour | If price falls to trigger, SL-Limit activates (observe in Kite) | Market |
 | TC-HAND-10 | Cost-to-cost trail | After entry, LTP ≥ entry×1.02 → Telegram trail msg; Kite SL trigger ≈ entry | Market |
 | TC-HAND-11 | EOD report | After alerts: `nse-alert report` shows close % per scrip + held/fired counts | None |
+| TC-HAND-12 | Upper-circuit exit — **not yet run against a live/paper Kite session, only unit-tested with a fake broker client** | On entry, log/`orders.json` (`circuit_limit`) shows a real `upper_circuit_limit` from Kite `quote()`, not `0.0`; if the stock later reaches that price, resting SL is cancelled and a market SELL fires, closing the position (`status=closed`, `closed_reason=upper_circuit_exit`); Telegram message says `real circuit ₹…`, not `…% fallback band` | Market |
 
 ### Suggested live `.env` (minimal risk)
 
@@ -121,6 +128,8 @@ TRADE_PRODUCT=MIS
 TRADE_STOP_WAIT_SEC=20
 TRADE_TRAIL_BREAKEVEN=true
 TRADE_TRAIL_BREAKEVEN_PCT=2
+TRADE_EXIT_ON_UPPER_CIRCUIT=true
+TRADE_UPPER_CIRCUIT_PCT=20
 CUSTOM_UNIVERSE_FILE=universes/liquid_sample.txt
 ```
 
@@ -158,3 +167,4 @@ TRADE_MODE=confirm   # then later: auto
 7. Confirm path forces place mode `auto` when executor is not `dry_run` (see `_confirm_pending` in `cli.py`).  
 8. Login/token flow is unchanged by order modes — refresh token daily before live tests.  
 9. Screener tests: `uv run pytest -q tests/test_screener.py` (see [SCREENER.md](SCREENER.md)).
+10. Upper-circuit exit fetches each symbol's real circuit price from Kite **once, at entry** (not per tick) and caches it on the position; if that lookup fails for any reason it falls back to the flat `TRADE_UPPER_CIRCUIT_PCT` — check the Telegram/`orders.json` wording (`real circuit ₹…` vs `…% fallback band`) to tell which one is actually in effect for a given position.
