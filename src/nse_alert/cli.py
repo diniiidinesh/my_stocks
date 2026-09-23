@@ -296,6 +296,13 @@ def watch_cmd(
             logger.info("%s", trail_msg)
             if tg:
                 tg.send_text(trail_msg)
+        prev_close = engine.prev_closes.get(symbol)
+        if prev_close:
+            circuit_msg = executor.manage_upper_circuit_exit(symbol, ltp, prev_close)
+            if circuit_msg:
+                logger.info("%s", circuit_msg)
+                if tg:
+                    tg.send_text(circuit_msg)
         for alert in engine.on_tick(symbol, ltp):
             notifier.send(alert)
             alert_count["n"] += 1
@@ -445,6 +452,8 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
         stop_wait_sec=settings.trade_stop_wait_sec,
         trail_breakeven=settings.trade_trail_breakeven,
         trail_breakeven_pct=settings.trade_trail_breakeven_pct,
+        exit_on_upper_circuit=settings.trade_exit_on_upper_circuit,
+        upper_circuit_pct=settings.trade_upper_circuit_pct,
         sizing_mode=settings.trade_sizing,
         margin_budget_inr=settings.trade_margin_inr,
         fallback_leverage=settings.trade_fallback_leverage,

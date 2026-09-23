@@ -202,12 +202,21 @@ class _FakeKite:
     VARIETY_REGULAR = "regular"
     EXCHANGE_NSE = "NSE"
 
-    def __init__(self, *, fill_price: float = 1500.0, fill_qty: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        fill_price: float = 1500.0,
+        fill_qty: int = 1,
+        upper_circuit_limit: float | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.modifies: list[dict[str, Any]] = []
+        self.cancels: list[dict[str, Any]] = []
+        self.quote_calls: list[list[str]] = []
         self._n = 0
         self.fill_price = fill_price
         self.fill_qty = fill_qty
+        self.upper_circuit_limit = upper_circuit_limit
 
     def place_order(self, **params: Any) -> str:
         self._n += 1
@@ -227,6 +236,17 @@ class _FakeKite:
     def modify_order(self, **params: Any) -> str:
         self.modifies.append(params)
         return "MOD-1"
+
+    def cancel_order(self, **params: Any) -> str:
+        self.cancels.append(params)
+        return "CANCEL-1"
+
+    def quote(self, instruments: list[str]) -> dict[str, Any]:
+        self.quote_calls.append(instruments)
+        row: dict[str, Any] = {"last_price": self.fill_price}
+        if self.upper_circuit_limit is not None:
+            row["upper_circuit_limit"] = self.upper_circuit_limit
+        return {instruments[0]: row}
 
 
 def test_tc_live_mock_auto_places_market_then_sl_limit(
@@ -680,6 +700,129 @@ def test_tc_trail_breakeven_dry_run(tmp_path: Path) -> None:
     assert msg is not None and "cost" in msg.lower()
     pos = ex.book.get_position("SBIN") if ex.book else None
     assert pos is not None and pos["breakeven_armed"] is True
+
+
+def test_tc_upper_circuit_exit_dry_run(tmp_path: Path) -> None:
+    ex = _executor(tmp_path, exit_on_upper_circuit=True, upper_circuit_pct=20.0)
+    req = _buy_req("TATAMOTORS")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+
+    assert ex.manage_upper_circuit_exit("TATAMOTORS", 118.0, prev_close=100.0) is None
+    msg = ex.manage_upper_circuit_exit("TATAMOTORS", 120.0, prev_close=100.0)
+    assert msg is not None and "upper circuit" in msg.lower()
+    pos = ex.book.get_position("TATAMOTORS") if ex.book else None
+    assert pos is None  # closed, no longer an open position
+
+    # Once closed, further ticks are a no-op (no duplicate exit orders).
+    assert ex.manage_upper_circuit_exit("TATAMOTORS", 125.0, prev_close=100.0) is None
+
+
+def test_tc_upper_circuit_exit_live_cancels_stop_and_sells_market(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeKite(fill_price=100.0)
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        exit_on_upper_circuit=True,
+        upper_circuit_pct=20.0,
+        stop_wait_sec=1.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    req = _buy_req("ADANIPOWER")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+
+    msg = ex.manage_upper_circuit_exit("ADANIPOWER", 120.0, prev_close=100.0)
+    assert msg is not None and "ADANIPOWER" in msg
+    assert len(fake.cancels) == 1
+    assert fake.cancels[0]["order_id"] == sl.order_id
+    market_sells = [
+        c
+        for c in fake.calls
+        if c["transaction_type"] == "SELL" and c["order_type"] == "MARKET"
+    ]
+    assert len(market_sells) == 1
+    pos = ex.book.get_position("ADANIPOWER") if ex.book else None
+    assert pos is None
+
+
+def test_tc_upper_circuit_exit_disabled_is_noop(tmp_path: Path) -> None:
+    ex = _executor(tmp_path, exit_on_upper_circuit=False, upper_circuit_pct=20.0)
+    req = _buy_req("IRFC")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=50.0)
+    assert entry.ok and sl is not None and sl.ok
+    assert ex.manage_upper_circuit_exit("IRFC", 65.0, prev_close=50.0) is None
+    pos = ex.book.get_position("IRFC") if ex.book else None
+    assert pos is not None  # still open — rule is off
+
+
+def test_tc_upper_circuit_fetches_and_uses_real_kite_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 10% circuit band — narrower than the 20% flat fallback, so the flat
+    # default would never fire for this stock while it's still locked.
+    fake = _FakeKite(fill_price=100.0, upper_circuit_limit=110.0)
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        exit_on_upper_circuit=True,
+        upper_circuit_pct=20.0,
+        stop_wait_sec=1.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    req = _buy_req("NARROWBAND")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+    assert fake.quote_calls == [["NSE:NARROWBAND"]]
+
+    pos = ex.book.get_position("NARROWBAND")
+    assert pos is not None and pos["circuit_limit"] == 110.0
+
+    # 10% move: below the flat 20% fallback, but at this stock's real band.
+    assert ex.manage_upper_circuit_exit("NARROWBAND", 109.0, prev_close=100.0) is None
+    msg = ex.manage_upper_circuit_exit("NARROWBAND", 110.0, prev_close=100.0)
+    assert msg is not None and "real circuit" in msg and "110.00" in msg
+    assert ex.book.get_position("NARROWBAND") is None
+
+
+def test_tc_upper_circuit_falls_back_to_pct_when_kite_quote_has_no_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Kite reachable, but the quote payload has no upper_circuit_limit field
+    # (e.g. a name Kite doesn't compute a band for) — must not crash, must
+    # fall back to the flat percent band.
+    fake = _FakeKite(fill_price=100.0, upper_circuit_limit=None)
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        exit_on_upper_circuit=True,
+        upper_circuit_pct=20.0,
+        stop_wait_sec=1.0,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    req = _buy_req("NOBAND")
+    entry, sl = ex.place_entry_with_stop(req, entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+
+    pos = ex.book.get_position("NOBAND")
+    assert pos is not None and pos["circuit_limit"] == 0.0
+
+    assert ex.manage_upper_circuit_exit("NOBAND", 115.0, prev_close=100.0) is None
+    msg = ex.manage_upper_circuit_exit("NOBAND", 120.0, prev_close=100.0)
+    assert msg is not None and "fallback band" in msg
+
+
+def test_tc_upper_circuit_fetch_returns_none_without_credentials(tmp_path: Path) -> None:
+    ex = _executor(tmp_path, exit_on_upper_circuit=True, upper_circuit_pct=20.0)
+    assert ex.fetch_upper_circuit_limit("SBIN") is None
 
 
 def test_tc_margin_sizing_uses_order_margins(

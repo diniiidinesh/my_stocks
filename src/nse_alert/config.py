@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     trade_trail_breakeven: bool = Field(default=True, alias="TRADE_TRAIL_BREAKEVEN")
     trade_trail_breakeven_pct: float = Field(default=2.0, alias="TRADE_TRAIL_BREAKEVEN_PCT")
     trade_confirm_ttl_minutes: int = Field(default=30, alias="TRADE_CONFIRM_TTL_MINUTES")
+    # Exit at market the moment LTP reaches the upper-circuit band from prev
+    # close — most NSE mid/small caps circuit at +20%, well above the 11/13%
+    # entry thresholds, and a resting SL below entry won't fill once the
+    # stock locks upper with no sellers left.
+    trade_exit_on_upper_circuit: bool = Field(default=True, alias="TRADE_EXIT_ON_UPPER_CIRCUIT")
+    trade_upper_circuit_pct: float = Field(default=20.0, alias="TRADE_UPPER_CIRCUIT_PCT")
 
     # --- EOD TA screener (separate from intraday alerts / orders) ---
     screen_min_market_cap_cr: float = Field(default=5000.0, alias="SCREEN_MIN_MARKET_CAP_CR")
