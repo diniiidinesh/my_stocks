@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from nse_alert.engine import Alert
-from nse_alert.notify.telegram import _format_telegram_alert, format_ist_clock
+from nse_alert.notify.telegram import (
+    _format_telegram_alert,
+    _format_telegram_alert_group,
+    format_ist_clock,
+)
 
 
 def test_format_ist_clock_converts_utc() -> None:
@@ -31,3 +35,24 @@ def test_telegram_alert_label_is_ist() -> None:
     assert "Time (IST): 2026-09-17 09:30:00" in text
     assert "Time (UTC)" not in text
     assert "INFY" in text
+
+
+def test_same_tick_thresholds_combine_into_one_message() -> None:
+    fired_at = datetime(2026, 9, 24, 3, 39, 14, tzinfo=timezone.utc)
+    alerts = [
+        Alert(
+            symbol="CHOLAFIN",
+            ltp=1630.0,
+            prev_close=1774.0,
+            change_pct=-8.12,
+            direction="DOWN",
+            threshold_pct=threshold,
+            fired_at=fired_at,
+            is_fno=True,
+        )
+        for threshold in (4.0, 7.0)
+    ]
+    text = _format_telegram_alert_group(alerts)
+    # One message naming both crossed thresholds, not two separate messages.
+    assert text.count("CHOLAFIN") == 1
+    assert "±4%" in text and "±7%" in text
