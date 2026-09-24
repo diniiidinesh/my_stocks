@@ -303,10 +303,12 @@ def watch_cmd(
                 logger.info("%s", circuit_msg)
                 if tg:
                     tg.send_text(circuit_msg)
-        for alert in engine.on_tick(symbol, ltp):
-            notifier.send(alert)
-            alert_count["n"] += 1
-            _handle_trade(alert)
+        alerts = engine.on_tick(symbol, ltp)
+        if alerts:
+            notifier.send_many(alerts)
+            alert_count["n"] += len(alerts)
+            for alert in alerts:
+                _handle_trade(alert)
         if executor.mode == "confirm":
             _sweep_expired_orders()
 

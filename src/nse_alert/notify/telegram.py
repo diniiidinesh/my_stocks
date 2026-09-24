@@ -31,34 +31,54 @@ def _alert_tags(alert: Alert) -> str:
 
 
 def _format_telegram_alert(alert: Alert) -> str:
-    arrow = "▲" if alert.direction == "UP" else "▼"
-    tags = _alert_tags(alert)
+    return _format_telegram_alert_group([alert])
+
+
+def _format_telegram_alert_group(alerts: list[Alert]) -> str:
+    """Format one tick's newly-crossed thresholds for one symbol as one message.
+
+    A fast-moving or gapping stock can cross several declared thresholds in a
+    single tick (e.g. ±4% and ±7% at once) — ``AlertEngine.on_tick`` returns
+    one ``Alert`` per threshold, all sharing the same symbol/LTP/fired_at.
+    Sending those as separate Telegram messages reads as duplicate alerts, so
+    they are combined here into a single "crossed ±4%, ±7%" message.
+    """
+    first = alerts[0]
+    arrow = "▲" if first.direction == "UP" else "▼"
+    tags = _alert_tags(first)
     tag_line = f"\nTags: *{tags}*" if tags else ""
+    thresholds = ", ".join(f"±{a.threshold_pct:g}%" for a in alerts)
     return (
-        f"{arrow} *{alert.symbol}* {alert.change_pct:+.2f}% "
-        f"(crossed ±{alert.threshold_pct:g}%)\n"
-        f"LTP: `{alert.ltp:.2f}` | Prev close: `{alert.prev_close:.2f}`\n"
-        f"Direction: {alert.direction}"
+        f"{arrow} *{first.symbol}* {first.change_pct:+.2f}% "
+        f"(crossed {thresholds})\n"
+        f"LTP: `{first.ltp:.2f}` | Prev close: `{first.prev_close:.2f}`\n"
+        f"Direction: {first.direction}"
         f"{tag_line}\n"
-        f"Time (IST): {format_ist_clock(alert.fired_at)}"
+        f"Time (IST): {format_ist_clock(first.fired_at)}"
     )
 
 
 class Notifier(Protocol):
     def send(self, alert: Alert) -> None: ...
 
+    def send_many(self, alerts: list[Alert]) -> None: ...
+
 
 class ConsoleNotifier:
     def send(self, alert: Alert) -> None:
-        tags = _alert_tags(alert)
-        tag_note = f" {tags}" if tags else ""
-        print(
-            f"[ALERT] {alert.direction} {alert.symbol} "
-            f"{alert.change_pct:+.2f}% (crossed ±{alert.threshold_pct:g}%) "
-            f"LTP={alert.ltp:.2f} prev={alert.prev_close:.2f}{tag_note} "
-            f"@ {alert.fired_at.isoformat()}",
-            flush=True,
-        )
+        self.send_many([alert])
+
+    def send_many(self, alerts: list[Alert]) -> None:
+        for alert in alerts:
+            tags = _alert_tags(alert)
+            tag_note = f" {tags}" if tags else ""
+            print(
+                f"[ALERT] {alert.direction} {alert.symbol} "
+                f"{alert.change_pct:+.2f}% (crossed ±{alert.threshold_pct:g}%) "
+                f"LTP={alert.ltp:.2f} prev={alert.prev_close:.2f}{tag_note} "
+                f"@ {alert.fired_at.isoformat()}",
+                flush=True,
+            )
 
 
 class TelegramNotifier:
@@ -68,7 +88,12 @@ class TelegramNotifier:
         self._url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
     def send(self, alert: Alert) -> None:
-        self.send_text(_format_telegram_alert(alert), parse_mode="Markdown")
+        self.send_many([alert])
+
+    def send_many(self, alerts: list[Alert]) -> None:
+        if not alerts:
+            return
+        self.send_text(_format_telegram_alert_group(alerts), parse_mode="Markdown")
 
     def send_text(self, text: str, *, parse_mode: str | None = None) -> None:
         import httpx
@@ -145,8 +170,11 @@ class MultiNotifier:
         self.notifiers = notifiers
 
     def send(self, alert: Alert) -> None:
+        self.send_many([alert])
+
+    def send_many(self, alerts: list[Alert]) -> None:
         for notifier in self.notifiers:
-            notifier.send(alert)
+            notifier.send_many(alerts)
 
 
 def build_notifier(
