@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from nse_alert.engine import parse_thresholds
 from nse_alert.orders import TradeMode
+from nse_alert.session import SessionClock, hhmm_to_time
 
 
 class Settings(BaseSettings):
@@ -70,6 +71,27 @@ class Settings(BaseSettings):
     # stock locks upper with no sellers left.
     trade_exit_on_upper_circuit: bool = Field(default=True, alias="TRADE_EXIT_ON_UPPER_CIRCUIT")
     trade_upper_circuit_pct: float = Field(default=20.0, alias="TRADE_UPPER_CIRCUIT_PCT")
+    # No fresh MIS entries (auto / confirm / signal offers) after these IST
+    # times — Zerodha's MIS auto square-off since the Aug 2026 closing
+    # auction: 15:12 for F&O (CAS) stocks, 15:25 for the rest.
+    mis_cutoff_cas_hhmm: int = Field(default=1512, alias="MIS_CUTOFF_CAS_HHMM")
+    mis_cutoff_non_cas_hhmm: int = Field(default=1525, alias="MIS_CUTOFF_NON_CAS_HHMM")
+
+    # --- Intraday signals (volume spike / 52-week breakout) — docs/SIGNALS.md ---
+    volume_spike_enabled: bool = Field(default=True, alias="VOLUME_SPIKE_ENABLED")
+    # Candle minutes, comma-separated (1,3,5,10,15,30,60), e.g. "5" or "5,15"
+    volume_spike_timeframes: str = Field(default="5", alias="VOLUME_SPIKE_TIMEFRAMES")
+    volume_spike_ema_period: int = Field(default=21, alias="VOLUME_SPIKE_EMA_PERIOD")
+    # Fire when closed-candle volume > this × EMA of prior candles' volume
+    volume_spike_mult: float = Field(default=2.0, alias="VOLUME_SPIKE_MULT")
+    # The 09:15 candle is nearly always > 2× (pre-open volume lands in it)
+    volume_spike_skip_opening_candle: bool = Field(
+        default=True, alias="VOLUME_SPIKE_SKIP_OPENING_CANDLE"
+    )
+    breakout_52w_enabled: bool = Field(default=True, alias="BREAKOUT_52W_ENABLED")
+    # Attach /confirm BUY + SELL offers to signal alerts (needs TRADE_MODE≠off)
+    signal_orders_enabled: bool = Field(default=True, alias="SIGNAL_ORDERS_ENABLED")
+    signal_order_sides: str = Field(default="buy,sell", alias="SIGNAL_ORDER_SIDES")
 
     # --- EOD TA screener (separate from intraday alerts / orders) ---
     screen_min_market_cap_cr: float = Field(default=5000.0, alias="SCREEN_MIN_MARKET_CAP_CR")
@@ -136,6 +158,27 @@ class Settings(BaseSettings):
         if mode not in {"off", "dry_run", "confirm", "auto"}:
             return "off"
         return mode  # type: ignore[return-value]
+
+    @property
+    def volume_spike_timeframe_list(self) -> list[int]:
+        from nse_alert.signals import parse_timeframes
+
+        return parse_timeframes(self.volume_spike_timeframes)
+
+    @property
+    def signal_order_side_list(self) -> list[str]:
+        sides = [p.strip().upper() for p in self.signal_order_sides.split(",")]
+        return [s for s in ("BUY", "SELL") if s in sides]
+
+    def session_clock(
+        self, fo_symbols: set[str] | None = None, *, fo_known: bool = True
+    ) -> SessionClock:
+        return SessionClock(
+            fo_symbols=fo_symbols,
+            fo_known=fo_known,
+            mis_cutoff_cas=hhmm_to_time(self.mis_cutoff_cas_hhmm),
+            mis_cutoff_non_cas=hhmm_to_time(self.mis_cutoff_non_cas_hhmm),
+        )
 
     @property
     def use_kite(self) -> bool:

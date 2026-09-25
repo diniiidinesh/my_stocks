@@ -23,7 +23,10 @@ High-level map of the codebase. Prefer this over scrolling `src/` blindly.
       │                                            │
       │                                            ├─► Notifier.send (console / Telegram)
       │                                            ├─► OrderExecutor (optional MIS + SL)
-      │                                            └─► manage_open_stops (cost-to-cost trail)
+      │                                            ├─► manage_open_stops (cost-to-cost trail)
+      │                                            └─► SignalMonitor (volume spike / 52w) ─► /confirm offers
+      │
+ SignalSeeder (background) ──Kite historical──► EMA warm-up + 52w/yesterday context
       ▼
  on exit / `report` ──► build_day_report (+ EOD closes) → file + optional Telegram
 ```
@@ -50,6 +53,8 @@ Nifty 500 ∪ Smallcap 250
 | `cli.py` | Click commands; wires watch/report/screen/login/orders |
 | `config.py` | `Settings` from env / `.env` |
 | `engine.py` | `%` move, multi-threshold dedupe, FO-only gate, ASM/F&O flags |
+| `session.py` | Per-symbol continuous close + MIS entry cutoff (F&O/CAS 15:15 / 15:12; others 15:30 / 15:25) |
+| `signals.py` | Volume-spike candles + EMA, 52-week breakout, signal message, background history seeder ([SIGNALS.md](SIGNALS.md)) |
 | `universe.py` | NSE EQ instruments + quote liquidity screen |
 | `surveillance.py` | NFO underlyings + Zerodha ASM sheet |
 | `feed.py` | `MockFeed`, `KiteFeed` WebSocket; alerts on repeated reconnects, exits the watcher if reconnection is abandoned |
@@ -79,6 +84,7 @@ Nifty 500 ∪ Smallcap 250
 |------------|---------|
 | `watch.lock` | Single-instance lock (`flock`) — holds the PID of the running watcher |
 | `fired.json` | Today’s dedupe keys + alert events |
+| `signals.json` | Today’s 52-week breakout dedupe keys |
 | `report-YYYY-MM-DD.txt` | EOD alert report |
 | `orders.json` | Pending / placed / open SL tracks |
 | `asm_symbols.txt` | Cached ASM list |
@@ -94,6 +100,8 @@ tests/test_engine.py
 tests/test_report.py
 tests/test_surveillance.py
 tests/test_orders.py
+tests/test_signals.py
+tests/test_session.py
 tests/test_screener.py
 tests/test_envfile.py
 ```
