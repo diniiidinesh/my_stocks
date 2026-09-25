@@ -8,6 +8,7 @@ from pathlib import Path
 
 import click
 
+from nse_alert.config import Settings
 from nse_alert.ipv4 import force_ipv4
 from nse_alert.confirm_bot import TelegramConfirmListener
 from nse_alert.config import Settings
@@ -1172,6 +1173,262 @@ One-time setup:
    (or paste: uv run nse-alert set-token YOUR_ACCESS_TOKEN)
 """.strip()
     )
+
+
+@main.group("research")
+def research_group() -> None:
+    """Offline alert analysis / strategy backtests (run on the Kite VM)."""
+
+
+@research_group.command("analyze")
+@click.option(
+    "--date",
+    "dates",
+    multiple=True,
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="Limit to calendar day(s); repeatable. Default: all found events.",
+)
+def research_analyze_cmd(dates: tuple) -> None:
+    """Summarize live alert history under STATE_DIR (fired.json + archives)."""
+    from datetime import date as date_cls
+
+    from nse_alert.research.analyze import (
+        analyze_local_events,
+        format_analysis,
+        load_events_for_days,
+    )
+
+    settings = Settings()
+    day_list = [d.date() for d in dates] if dates else None  # type: ignore[attr-defined]
+    events = load_events_for_days(settings.state_dir, day_list)
+    # Also try load_events for today if archive naming differs.
+    if not events and day_list is None:
+        events = load_events(settings.state_dir / "fired.json", as_of=date_cls.today())
+    analysis = analyze_local_events(events)
+    click.echo(format_analysis(analysis))
+
+
+@research_group.command("strategies")
+def research_strategies_cmd() -> None:
+    """List built-in backtest strategy ids."""
+    from nse_alert.research.strategies import STRATEGY_CATALOG
+
+    for sid, spec in STRATEGY_CATALOG.items():
+        click.echo(f"{sid:<12} {spec.description}")
+
+
+@research_group.command("backtest")
+@click.option(
+    "--days",
+    type=int,
+    default=60,
+    show_default=True,
+    help="Lookback calendar days ending today (weekends skipped in sessions).",
+)
+@click.option(
+    "--start",
+    "start_raw",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Explicit start date (overrides --days).",
+)
+@click.option(
+    "--end",
+    "end_raw",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Explicit end date (default: today).",
+)
+@click.option(
+    "--strategies",
+    "strategy_csv",
+    type=str,
+    default="a1,a2_7,a2_11,a_close_7,a_close_13",
+    show_default=True,
+    help="Comma-separated strategy ids (see `research strategies`).",
+)
+@click.option(
+    "--interval",
+    type=click.Choice(["5minute", "15minute", "minute"], case_sensitive=False),
+    default="5minute",
+    show_default=True,
+)
+@click.option(
+    "--cost-bps",
+    type=float,
+    default=10.0,
+    show_default=True,
+    help="Round-trip cost in basis points subtracted from each trade.",
+)
+@click.option(
+    "--max-symbols",
+    type=int,
+    default=40,
+    show_default=True,
+    help="Cap universe size (liquidity-ranked). Use a small number first.",
+)
+@click.option(
+    "--threshold",
+    "threshold_raw",
+    type=str,
+    default=None,
+    help='Alert levels to reconstruct (default THRESHOLD_PCT / 4,7,11,13).',
+)
+@click.option(
+    "--csv",
+    "csv_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional path to write per-trade CSV.",
+)
+def research_backtest_cmd(
+    days: int,
+    start_raw: object | None,
+    end_raw: object | None,
+    strategy_csv: str,
+    interval: str,
+    cost_bps: float,
+    max_symbols: int,
+    threshold_raw: str | None,
+    csv_path: Path | None,
+) -> None:
+    """Reconstruct ±% alerts from Kite bars and simulate entry strategies.
+
+    Run this on the **IP-whitelisted VM** after `nse-alert login`. Start with
+    ``--max-symbols 20 --days 30``; full-universe multi-month runs take a while
+    (Kite historical is rate-limited).
+    """
+    from datetime import date as date_cls, timedelta
+
+    from nse_alert.research.runner import (
+        format_backtest_report,
+        run_backtest,
+        write_trades_csv,
+    )
+    from nse_alert.research.strategies import STRATEGY_CATALOG
+    from nse_alert.screener.history import get_daily_history
+
+    settings = Settings()
+    if not settings.kite_api_key or not settings.kite_access_token:
+        raise click.ClickException(
+            "research backtest needs KITE_API_KEY + KITE_ACCESS_TOKEN "
+            "(run on the VM after `nse-alert login`)."
+        )
+
+    try:
+        thresholds = (
+            parse_thresholds(threshold_raw)
+            if threshold_raw is not None
+            else settings.thresholds
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    strategy_ids = [s.strip() for s in strategy_csv.split(",") if s.strip()]
+    unknown = [s for s in strategy_ids if s not in STRATEGY_CATALOG]
+    if unknown:
+        raise click.ClickException(
+            f"Unknown strategies: {unknown}. Known: {sorted(STRATEGY_CATALOG)}"
+        )
+
+    end_d = (
+        end_raw.date()  # type: ignore[attr-defined]
+        if end_raw is not None
+        else date_cls.today()
+    )
+    start_d = (
+        start_raw.date()  # type: ignore[attr-defined]
+        if start_raw is not None
+        else end_d - timedelta(days=max(1, days))
+    )
+    if start_d > end_d:
+        raise click.ClickException("--start must be on or before --end")
+
+    if settings.kite_force_ipv4:
+        force_ipv4()
+
+    instruments = build_universe(
+        min_turnover_cr=settings.min_turnover_cr,
+        min_price=settings.min_price,
+        kite_api_key=settings.kite_api_key,
+        kite_access_token=settings.kite_access_token,
+        custom_universe_file=settings.custom_universe_file,
+        mock=False,
+    )
+    instruments = sorted(instruments, key=lambda i: i.turnover_cr, reverse=True)
+    if max_symbols > 0:
+        instruments = instruments[:max_symbols]
+    if not instruments:
+        raise click.ClickException("Universe empty — check CUSTOM_UNIVERSE_FILE / filters")
+
+    kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+    fo_symbols: set[str] = set()
+    fo_only = settings.fo_only_threshold_list
+    if fo_only:
+        try:
+            fo_symbols = load_nfo_equity_underlyings(kite)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NFO underlyings unavailable (%s); FO-only disabled", exc)
+            fo_only = []
+    asm_symbols = load_asm_symbols(
+        url=settings.asm_sheet_url,
+        cache_path=settings.state_dir / "asm_symbols.txt",
+        enabled=settings.asm_enabled,
+    )
+
+    click.echo(
+        f"Backtest {start_d}→{end_d} | {len(instruments)} symbols | "
+        f"{interval} | strategies={strategy_ids}"
+    )
+
+    daily_by: dict = {}
+    hist_dir = settings.state_dir / "screener" / "history"
+    for inst in instruments:
+        try:
+            daily_by[inst.symbol.upper()] = get_daily_history(
+                inst.symbol,
+                cache_dir=hist_dir,
+                days=max(400, (end_d - start_d).days + 40),
+                kite=kite,
+                instrument_token=inst.instrument_token,
+                prefer_kite=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Daily history failed for %s: %s", inst.symbol, exc)
+
+    report = run_backtest(
+        instruments=instruments,
+        kite=kite,
+        start=start_d,
+        end=end_d,
+        thresholds=thresholds,
+        fo_only_thresholds=fo_only,
+        fo_symbols=fo_symbols,
+        asm_symbols=asm_symbols,
+        strategy_ids=strategy_ids,
+        cache_dir=settings.state_dir / "research",
+        interval=interval.lower(),
+        cost_bps_roundtrip=cost_bps,
+    )
+    text = format_backtest_report(report)
+    out_path = (
+        settings.state_dir
+        / "research"
+        / f"backtest-{start_d.isoformat()}_{end_d.isoformat()}.txt"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(text + "\n", encoding="utf-8")
+    click.echo("")
+    click.echo(text)
+    click.echo(f"\nSaved: {out_path}")
+
+    trades_path = csv_path or (
+        settings.state_dir
+        / "research"
+        / f"trades-{start_d.isoformat()}_{end_d.isoformat()}.csv"
+    )
+    write_trades_csv(report.strategies, trades_path)
+    click.echo(f"Trades CSV: {trades_path}")
 
 
 if __name__ == "__main__":

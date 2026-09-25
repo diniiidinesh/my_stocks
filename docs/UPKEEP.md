@@ -11,6 +11,7 @@ Use this checklist whenever you change behaviour users (or future-you) need to k
 | Login / redirect / token flow | [LOGIN.md](LOGIN.md) — if **unchanged**, say so in the PR description |
 | Trading modes / SL / sizing / caps | [ORDERS.md](ORDERS.md), [TESTING_ORDERS.md](TESTING_ORDERS.md), `.env.example` |
 | EOD TA screener filters / Excel | [SCREENER.md](SCREENER.md), `.env.example`, [../deploy/CLOUD.md](../deploy/CLOUD.md) cron if needed |
+| Research / backtest strategies or CLI | [RESEARCH.md](RESEARCH.md), [ARCHITECTURE.md](ARCHITECTURE.md), root README CLI list |
 | Order test plan / handoff checklist | [TESTING_ORDERS.md](TESTING_ORDERS.md) |
 | Deploy / ports / IP whitelist | [../deploy/CLOUD.md](../deploy/CLOUD.md) |
 | Provider cost / free tier advice | [../deploy/COST.md](../deploy/COST.md) |
