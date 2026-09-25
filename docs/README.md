@@ -9,6 +9,7 @@ How to **find**, **read**, and **update** docs in this repository.
 | Run a demo without credentials | [../README.md](../README.md) → Quick start |
 | Understand alert rules (4% F&O, ASM, EOD close report) | [ALERTS.md](ALERTS.md) |
 | Set up / renew Kite login | [LOGIN.md](LOGIN.md) |
+| Volume-spike / 52-week breakout alerts + ordering from Telegram | [SIGNALS.md](SIGNALS.md) |
 | Enable MIS test orders (sizing, SL trail) | [ORDERS.md](ORDERS.md) |
 | Fix group Telegram confirms / copy chat id | [ORDERS.md](ORDERS.md) → Telegram groups |
 | Run the EOD TA screener (Excel + Telegram) | [SCREENER.md](SCREENER.md) |

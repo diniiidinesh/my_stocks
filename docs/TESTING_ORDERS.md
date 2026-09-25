@@ -83,7 +83,7 @@ You must run these on your machine / Lightsail VM with a real Kite session.
 1. Paid Kite Connect + valid **today’s** `KITE_ACCESS_TOKEN` (`nse-alert login`).
 2. Static IP **whitelisted** on Kite (required for live orders from Apr 2026).
 3. Funds / margin enough for about **`TRADE_MARGIN_INR`** of MIS (default ₹10k), or keep `dry_run` until ready. Use `TRADE_SIZING=fixed` + `TRADE_QTY=1` for the smallest live test.
-4. Prefer market hours (9:15–15:30 IST) for live placement.
+4. Prefer market hours for live placement: before **15:12 IST** for F&O stocks and 15:25 for the rest. The watcher refuses new MIS entries after those times (Aug 2026 closing auction).
 5. Start with **`TRADE_MODE=dry_run`** on the VM once, then **`confirm`**, only then **`auto`**.
 
 ### Manual / live cases
