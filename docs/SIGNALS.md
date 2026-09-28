@@ -9,10 +9,13 @@ These run inside `watch`, alongside the ±% threshold alerts ([ALERTS.md](ALERTS
 | Env | Default | Meaning |
 |-----|---------|---------|
 | `VOLUME_SPIKE_ENABLED` | `true` | Turn the rule on or off |
-| `VOLUME_SPIKE_TIMEFRAMES` | `5` | Candle minutes, comma-separated. Allowed values: `1,3,5,10,15,30,60`, e.g. `5,15` |
+| `VOLUME_SPIKE_TIMEFRAMES` | `5,15` | Candle minutes, comma-separated. Allowed values: `1,3,5,10,15,30,60`, e.g. `5,15` |
 | `VOLUME_SPIKE_EMA_PERIOD` | `21` | EMA length, in candles of the same timeframe |
-| `VOLUME_SPIKE_MULT` | `2` | Fires when candle volume is **more than** N × EMA |
+| `VOLUME_SPIKE_MULT` | `2.5` | Fires when candle volume is **more than** N × EMA |
+| `VOLUME_SPIKE_MIN_EMA` | `5:200000,15:1000000` | Per timeframe, `MINUTES:SHARES`: the EMA itself must be at least this many shares per candle. A timeframe left out has no floor. |
+| `VOLUME_SPIKE_MIN_MARKET_CAP_CR` | `1000` | Only stocks with market cap ≥ ₹N crore (`0` = off). Volume spikes only, not 52-week alerts. |
 | `VOLUME_SPIKE_SKIP_OPENING_CANDLE` | `true` | Ignore the 09:15 candle |
+| `VOLUME_SPIKE_MIN_AVG_VALUE_CR` | `10` | Only alert for stocks averaging at least ₹N crore traded **per day** (close × volume, last 20 sessions; `0` = off). Stocks whose daily history failed to load are treated as below the floor. |
 
 ```text
 mult = volume(just-closed candle) / EMA21(volume of the candles before it)
@@ -26,6 +29,39 @@ fire when mult > VOLUME_SPIKE_MULT
 - **The spike is excluded from its own baseline**: the EMA the candle is compared with does not include that candle yet.
 - **Candles we can't measure are skipped, not guessed**: this covers the candle `watch` joined part-way through, and the first candle after a feed gap (backlog volume would look like a false spike).
 - **Opening candle**: pre-open auction volume lands in the 09:15 candle, so it is almost always above 2× for the whole universe. That would mean hundreds of alerts at 09:20. It is skipped by default; set `VOLUME_SPIKE_SKIP_OPENING_CANDLE=false` to include it.
+
+### Filters and the cadence they give
+
+Measured over 9 sessions (15–25 Sep 2026) on the 511-stock qualified universe (`MIN_TURNOVER_CR=25`), with the defaults above (2.5×, EMA ≥ 200k on 5m and ≥ 1M on 15m, market cap ≥ ₹1,000 Cr, value ≥ ₹10 Cr):
+
+| Multiplier | 5m alerts/day | 15m alerts/day | Total/day | Stocks/day |
+|------------|---------------|----------------|-----------|------------|
+| 2× | 204 | 25 | 229 | 52 |
+| **2.5×** | **125** | **16** | **~141** | **45** |
+| 3× | 83 | 10 | 93 | 38 |
+
+- **Without the EMA floors**, the same universe gives ~3,500 alerts a day. The floors are what make this usable.
+- **Busiest times:** 09:20–10:00 and 15:00–15:30.
+- **With a 15-minute digest**, that's about 23 messages a day with ~6 stocks each.
+
+The EMA floors are **share counts**, so they favour low-priced stocks. SUZLON, YESBANK and IFCI qualify easily, while a ₹12,000 stock like MARUTI essentially never averages 200k shares per 5 minutes. A ₹-value floor would be price-neutral if that becomes a problem.
+
+**Market caps** come from Yahoo Finance at startup, cached daily in `.nse_alert/screener/market_caps.csv` (shared with the screener).
+- About 3% of stocks have no market cap; they get no volume alerts.
+- If no market caps load at all (Yahoo down), the market-cap floor is skipped, with an error in the log, rather than silencing every volume alert.
+
+### Choosing the value floor
+
+It's a ₹ value, not a share count, so high-priced stocks aren't penalised: MARUTI trades only ~0.4M shares a day but ~₹500 Cr.
+
+Rule of thumb: keep your order to about **1% of what trades in the time you'd need to get out**. A day has 75 five-minute candles.
+
+| Style | Time to exit | Floor ≈ | At ₹50k position |
+|-------|--------------|---------|------------------|
+| Intraday (MIS) | one 5m candle | position × 75 ÷ 1% | ~₹40 Cr → **₹50 Cr** with margin |
+| Swing (CNC) | a session | position ÷ 1% | ~₹0.5 Cr, so **₹10 Cr** (screener's `SCREEN_MIN_TURNOVER_CR`) for spread/circuit quality |
+
+Raise the floor as your position size grows. This is a sizing heuristic, not investment advice.
 
 ## 52-week high / low breakout
 
@@ -64,6 +100,23 @@ Order: BUY /confirm A1B2C3 · SELL /confirm D4E5F6
 | Yesterday % | yesterday's close vs the close of the session before it (daily bars) |
 | 52w high / low | daily bars, prior 365 days, excluding today |
 | Volume multiplier | candle volume ÷ EMA of the previous candles |
+
+## Digest (pooled alerts)
+
+So these alerts don't bury the ±% move alerts, signals can be pooled into **one message per N-minute window**:
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `SIGNAL_DIGEST_52W_MINUTES` | `15` | Pool 52-week high/low alerts (`0` = send each at once) |
+| `SIGNAL_DIGEST_VOLUME_MINUTES` | `0` | Pool volume-spike alerts (`0` = send each at once) |
+
+- **Windows follow the IST clock** (10:00–10:15, 10:15–10:30, …). A window is sent on the first tick after it ends, so a breakout at 10:02 arrives around 10:15. That delay is the cost of pooling.
+- **Empty windows send nothing.** If both types use the same minutes, they share one digest message.
+- **What's visible:** one summary line per type, e.g. `🚀 52W highs (3): RELIANCE +2.1%, SBIN +1.4%, …`, capped at 12 names plus a count.
+- **What's collapsed:** the per-stock details (price, level broken, day %, 52w high/low, yesterday's close and %) and the `/confirm` ids sit in a Telegram *expandable quote*. Tap it to open.
+- **Offers are created when the digest is sent**, so the confirm TTL and the MIS cutoff count from then. A stock detected before the cutoff but sent after it shows `No order offer: …`.
+- **Long digests** split into parts `(1/2)`, `(2/2)` under Telegram's 4,096-character limit.
+- **On shutdown**, whatever is still waiting is sent straight away rather than dropped.
 
 ## Ordering from Telegram
 

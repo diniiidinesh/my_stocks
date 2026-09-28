@@ -320,3 +320,87 @@ def test_confirm_signal_offer_sizes_at_live_ltp(
     assert pos is not None
     assert pos["entry_price"] == 250.0
     assert pos["quantity"] == 200  # 10k × 5x / ₹250 (offline fallback sizing)
+
+
+def test_min_avg_daily_value_floor(tmp_path: Path) -> None:
+    def run(avg_value: float | None, floor: float) -> int:
+        mon = SignalMonitor(
+            prev_closes={"AAA": 100.0},
+            state_path=tmp_path / "s.json",
+            timeframes=[5],
+            breakout_enabled=False,
+            min_avg_daily_value=floor,
+        )
+        if avg_value is not None:
+            mon.set_context("AAA", SymbolContext(100.0, 0.0, 130.0, 70.0, avg_value))
+        mon.volume.seed("AAA", 5, _history(), now=_ist(10, 0, 10))
+        mon.on_tick("AAA", 101.0, 50_000, now=_ist(10, 0, 10))
+        mon.on_tick("AAA", 102.0, 53_000, now=_ist(10, 9, 58))
+        return len(mon.on_tick("AAA", 103.0, 53_100, now=_ist(10, 10, 2)))
+
+    cr = 1e7
+    assert run(60 * cr, 50 * cr) == 1
+    assert run(40 * cr, 50 * cr) == 0
+    assert run(None, 50 * cr) == 0  # unknown liquidity → suppressed
+    assert run(None, 0) == 1  # floor off
+
+
+def test_context_avg_daily_value_is_close_times_volume_last_20() -> None:
+    idx = pd.bdate_range(end="2026-09-23", periods=30)
+    df = pd.DataFrame(
+        {"open": 1.0, "high": 2.0, "low": 1.0,
+         "close": [1.0] * 10 + [200.0] * 20,
+         "volume": [10.0] * 10 + [100.0] * 20},
+        index=idx,
+    )
+    ctx = context_from_daily(df, today=DAY)
+    assert ctx is not None and ctx.avg_daily_value == 20_000.0  # 200 × 100
+
+
+def test_parse_min_ema() -> None:
+    from nse_alert.signals import parse_min_ema
+
+    assert parse_min_ema("5:200000, 15:1_000_000") == {5: 200_000.0, 15: 1_000_000.0}
+    assert parse_min_ema("") == {}
+    with pytest.raises(ValueError):
+        parse_min_ema("4:100")
+    with pytest.raises(ValueError):
+        parse_min_ema("200000")
+
+
+def test_min_ema_floor_per_timeframe() -> None:
+    # history EMA = 1,000 shares; a 3x candle fires only if the floor allows
+    for floor, expected in ((500, 1), (1_000, 1), (1_001, 0)):
+        det = VolumeSpikeDetector(timeframes=[5], ema_period=21, mult=2.0, min_ema={5: floor})
+        det.seed("AAA", 5, _history(), now=_ist(10, 0, 10))
+        det.on_tick("AAA", 50_000, _ist(10, 0, 10))
+        det.on_tick("AAA", 53_000, _ist(10, 9, 58))
+        assert len(det.on_tick("AAA", 53_100, _ist(10, 10, 2))) == expected
+    # a floor on another timeframe doesn't affect 5m
+    det = VolumeSpikeDetector(timeframes=[5], mult=2.0, min_ema={15: 10**9})
+    det.seed("AAA", 5, _history(), now=_ist(10, 0, 10))
+    det.on_tick("AAA", 50_000, _ist(10, 0, 10))
+    det.on_tick("AAA", 53_000, _ist(10, 9, 58))
+    assert len(det.on_tick("AAA", 53_100, _ist(10, 10, 2))) == 1
+
+
+def test_market_cap_floor(tmp_path: Path) -> None:
+    def run(caps: dict[str, float] | None) -> int:
+        mon = SignalMonitor(
+            prev_closes={"AAA": 100.0},
+            state_path=tmp_path / "s.json",
+            timeframes=[5],
+            breakout_enabled=False,
+            min_market_cap_cr=1_000,
+        )
+        mon.market_caps = caps
+        mon.volume.seed("AAA", 5, _history(), now=_ist(10, 0, 10))
+        mon.on_tick("AAA", 101.0, 50_000, now=_ist(10, 0, 10))
+        mon.on_tick("AAA", 102.0, 53_000, now=_ist(10, 9, 58))
+        return len(mon.on_tick("AAA", 103.0, 53_100, now=_ist(10, 10, 2)))
+
+    assert run({"AAA": 1_500.0}) == 1
+    assert run({"AAA": 900.0}) == 0
+    assert run({"BBB": 5_000.0}) == 0  # this stock's cap unknown → suppressed
+    assert run(None) == 1  # no caps loaded at all → floor skipped, not silenced
+    assert run({}) == 1
