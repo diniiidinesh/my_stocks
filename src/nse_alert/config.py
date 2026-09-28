@@ -80,10 +80,23 @@ class Settings(BaseSettings):
     # --- Intraday signals (volume spike / 52-week breakout) — docs/SIGNALS.md ---
     volume_spike_enabled: bool = Field(default=True, alias="VOLUME_SPIKE_ENABLED")
     # Candle minutes, comma-separated (1,3,5,10,15,30,60), e.g. "5" or "5,15"
-    volume_spike_timeframes: str = Field(default="5", alias="VOLUME_SPIKE_TIMEFRAMES")
+    volume_spike_timeframes: str = Field(default="5,15", alias="VOLUME_SPIKE_TIMEFRAMES")
     volume_spike_ema_period: int = Field(default=21, alias="VOLUME_SPIKE_EMA_PERIOD")
     # Fire when closed-candle volume > this × EMA of prior candles' volume
-    volume_spike_mult: float = Field(default=2.0, alias="VOLUME_SPIKE_MULT")
+    volume_spike_mult: float = Field(default=2.5, alias="VOLUME_SPIKE_MULT")
+    # Floor on the prior candle-volume EMA per timeframe, shares: "5:200000,15:1000000"
+    volume_spike_min_ema: str = Field(
+        default="5:200000,15:1000000", alias="VOLUME_SPIKE_MIN_EMA"
+    )
+    # Volume spikes only for stocks with market cap ≥ this, ₹ crore; 0 = off
+    volume_spike_min_market_cap_cr: float = Field(
+        default=1000.0, alias="VOLUME_SPIKE_MIN_MARKET_CAP_CR"
+    )
+    # Only stocks averaging ≥ this traded value/day, ₹ crore (last 20
+    # sessions, close × volume); 0 = off.
+    volume_spike_min_avg_value_cr: float = Field(
+        default=10.0, alias="VOLUME_SPIKE_MIN_AVG_VALUE_CR"
+    )
     # The 09:15 candle is nearly always > 2× (pre-open volume lands in it)
     volume_spike_skip_opening_candle: bool = Field(
         default=True, alias="VOLUME_SPIKE_SKIP_OPENING_CANDLE"
@@ -92,6 +105,10 @@ class Settings(BaseSettings):
     # Attach /confirm BUY + SELL offers to signal alerts (needs TRADE_MODE≠off)
     signal_orders_enabled: bool = Field(default=True, alias="SIGNAL_ORDERS_ENABLED")
     signal_order_sides: str = Field(default="buy,sell", alias="SIGNAL_ORDER_SIDES")
+    # Pool signals into one Telegram digest per N-minute window (0 = send each
+    # at once). Details + /confirm ids sit in a collapsed quote.
+    signal_digest_52w_minutes: int = Field(default=15, alias="SIGNAL_DIGEST_52W_MINUTES")
+    signal_digest_volume_minutes: int = Field(default=0, alias="SIGNAL_DIGEST_VOLUME_MINUTES")
 
     # --- EOD TA screener (separate from intraday alerts / orders) ---
     screen_min_market_cap_cr: float = Field(default=5000.0, alias="SCREEN_MIN_MARKET_CAP_CR")
@@ -164,6 +181,12 @@ class Settings(BaseSettings):
         from nse_alert.signals import parse_timeframes
 
         return parse_timeframes(self.volume_spike_timeframes)
+
+    @property
+    def volume_spike_min_ema_map(self) -> dict[int, float]:
+        from nse_alert.signals import parse_min_ema
+
+        return parse_min_ema(self.volume_spike_min_ema)
 
     @property
     def signal_order_side_list(self) -> list[str]:

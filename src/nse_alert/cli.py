@@ -32,9 +32,14 @@ from nse_alert.report import (
 )
 from nse_alert.session import SessionClock
 from nse_alert.signals import (
+    HIGH_52W,
+    LOW_52W,
+    VOLUME_SPIKE,
     Signal,
+    SignalDigest,
     SignalMonitor,
     SignalSeeder,
+    format_signal_digest,
     format_signal_message,
 )
 from nse_alert.surveillance import load_asm_symbols, load_nfo_equity_underlyings
@@ -124,6 +129,10 @@ def watch_cmd(
         volume_timeframes = settings.volume_spike_timeframe_list
     except ValueError as exc:
         raise click.ClickException(f"VOLUME_SPIKE_TIMEFRAMES: {exc}") from exc
+    try:
+        volume_min_ema = settings.volume_spike_min_ema_map
+    except ValueError as exc:
+        raise click.ClickException(f"VOLUME_SPIKE_MIN_EMA: {exc}") from exc
 
     lock_fh = acquire_single_instance(settings.state_dir)
 
@@ -250,6 +259,9 @@ def watch_cmd(
             timeframes=volume_timeframes,
             ema_period=settings.volume_spike_ema_period,
             volume_mult=settings.volume_spike_mult,
+            min_avg_daily_value=settings.volume_spike_min_avg_value_cr * 1e7,  # Cr → ₹
+            min_ema=volume_min_ema,
+            min_market_cap_cr=settings.volume_spike_min_market_cap_cr,
             skip_opening_candle=settings.volume_spike_skip_opening_candle,
             volume_enabled=settings.volume_spike_enabled,
             breakout_enabled=settings.breakout_52w_enabled,
@@ -280,7 +292,19 @@ def watch_cmd(
     listener_wanted = executor.mode == "confirm" or signal_offers_on
     last_ltp: dict[str, float] = {}
 
-    def _handle_signal(sig: Signal) -> None:
+    # Signal kind → shared digest (kinds with the same window share one).
+    digests_by_minutes: dict[int, SignalDigest] = {}
+    digest_for: dict[str, SignalDigest] = {}
+    for kinds, minutes in (
+        ((HIGH_52W, LOW_52W), settings.signal_digest_52w_minutes),
+        ((VOLUME_SPIKE,), settings.signal_digest_volume_minutes),
+    ):
+        if minutes > 0:
+            digest = digests_by_minutes.setdefault(minutes, SignalDigest(minutes))
+            for kind in kinds:
+                digest_for[kind] = digest
+
+    def _signal_offers(sig: Signal) -> tuple[list[tuple[str, str]], str | None]:
         offers: list[tuple[str, str]] = []
         cutoff_note = _entry_cutoff_note(sig.symbol) if signal_offers_on else None
         if signal_offers_on and cutoff_note is None:
@@ -307,13 +331,36 @@ def watch_cmd(
                     source="signal",
                 )
                 offers.append((side, pending.id))
-        msg = format_signal_message(
-            sig, offers=offers, note=f"No order offer: {cutoff_note}" if cutoff_note else None
-        )
+        return offers, f"No order offer: {cutoff_note}" if cutoff_note else None
+
+    def _handle_signal(sig: Signal) -> None:
+        digest = digest_for.get(sig.kind)
+        if digest is not None:
+            digest.add(sig)
+            return
+        offers, note = _signal_offers(sig)
+        msg = format_signal_message(sig, offers=offers, note=note)
         if tg:
             tg.send_text(msg, parse_mode="Markdown")
         else:
             click.echo(msg)
+
+    def _send_digest(digest: SignalDigest, items: list[Signal], end: datetime) -> None:
+        # Offers are created now, not at detection: the confirm TTL and the
+        # MIS cutoff then count from when you can actually see them.
+        entries = [(sig, *_signal_offers(sig)) for sig in items]
+        start = digest.slot_start(items[0].fired_at)
+        for msg in format_signal_digest(entries, start=start, end=end):
+            if tg:
+                tg.send_text(msg, parse_mode="HTML")
+            else:
+                click.echo(msg)
+
+    def _flush_digests(now: datetime, *, final: bool = False) -> None:
+        for digest in digests_by_minutes.values():
+            items = digest.pop_all() if final else digest.pop_due(now)
+            if items:
+                _send_digest(digest, items, now if final else digest.slot_start(now))
 
     def _handle_trade(alert: object) -> None:
         from nse_alert.engine import Alert as AlertType
@@ -429,6 +476,8 @@ def watch_cmd(
         if signal_monitor is not None:
             for sig in signal_monitor.on_tick(symbol, ltp, volume):
                 _handle_signal(sig)
+            if digests_by_minutes:
+                _flush_digests(datetime.now(timezone.utc))
         if listener_wanted:
             _sweep_expired_orders()
 
@@ -551,6 +600,8 @@ def watch_cmd(
             confirm_listener.stop()
         if signal_seeder:
             signal_seeder.stop()
+        # Don't swallow signals still waiting for their window on shutdown.
+        _flush_digests(datetime.now(timezone.utc), final=True)
         release_single_instance(lock_fh)
 
     logger.info("Done. Alerts fired this run: %d", alert_count["n"])
@@ -566,13 +617,20 @@ def _signals_label(
 ) -> str:
     parts: list[str] = []
     if settings.volume_spike_enabled:
-        tfs = ",".join(f"{t}m" for t in timeframes)
+        floors = settings.volume_spike_min_ema_map
+        tfs = ",".join(
+            f"{t}m" + (f"≥{floors[t]:,.0f}" if t in floors else "") for t in timeframes
+        )
+        digest = settings.signal_digest_volume_minutes
         parts.append(
             f"vol>{settings.volume_spike_mult:g}xEMA{settings.volume_spike_ema_period}"
-            f"@{tfs}"
+            f"@{tfs} mcap≥₹{settings.volume_spike_min_market_cap_cr:g}Cr "
+            f"value≥₹{settings.volume_spike_min_avg_value_cr:g}Cr"
+            + (f" (digest {digest}m)" if digest > 0 else "")
         )
     if settings.breakout_52w_enabled:
-        parts.append("52w")
+        digest = settings.signal_digest_52w_minutes
+        parts.append(f"52w(digest {digest}m)" if digest > 0 else "52w")
     if not parts:
         return "off"
     return "+".join(parts) + (" (orders via /confirm)" if offers_on else " (alerts only)")

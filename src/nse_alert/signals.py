@@ -72,6 +72,23 @@ def parse_timeframes(raw: str | int | list[int]) -> list[int]:
     return sorted(set(values))
 
 
+def parse_min_ema(raw: str) -> dict[int, float]:
+    """``"5:200000,15:1000000"`` → ``{5: 200000.0, 15: 1000000.0}`` (shares)."""
+    out: dict[int, float] = {}
+    for part in str(raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        tf_raw, sep, floor_raw = part.partition(":")
+        if not sep:
+            raise ValueError(f"expected MINUTES:SHARES, got {part!r}")
+        tf = int(tf_raw.strip())
+        if tf not in KITE_INTERVALS:
+            raise ValueError(f"unsupported candle minutes {tf}")
+        out[tf] = float(floor_raw.strip().replace("_", ""))
+    return out
+
+
 def _session_bounds(
     ist_now: datetime, close: dtime = CONTINUOUS_CLOSE_NON_CAS
 ) -> tuple[datetime, datetime]:
@@ -98,6 +115,9 @@ def candle_start(
     return open_dt + timedelta(minutes=idx * minutes)
 
 
+AVG_DAILY_VALUE_DAYS = 20
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolContext:
     """Per-symbol reference levels from daily bars *before* today."""
@@ -106,6 +126,10 @@ class SymbolContext:
     prev_day_change_pct: float | None
     high_52w: float | None
     low_52w: float | None
+    # Mean traded value/day in ₹ (close × volume) over the last
+    # AVG_DAILY_VALUE_DAYS sessions — a share count would penalise
+    # high-priced stocks (MARUTI trades ~0.4M shares but ~₹500 Cr/day).
+    avg_daily_value: float | None = None
 
 
 def context_from_daily(df: pd.DataFrame, *, today: date) -> SymbolContext | None:
@@ -121,14 +145,17 @@ def context_from_daily(df: pd.DataFrame, *, today: date) -> SymbolContext | None
         before = float(bars["close"].iloc[-2])
         if before > 0:
             prev_day_pct = (prev_close / before - 1.0) * 100.0
+    recent = bars.tail(AVG_DAILY_VALUE_DAYS)
+    avg_value = float((recent["close"] * recent["volume"]).mean())
     window = bars[bars.index >= pd.Timestamp(today - timedelta(days=365))]
     if window.empty:
-        return SymbolContext(prev_close, prev_day_pct, None, None)
+        return SymbolContext(prev_close, prev_day_pct, None, None, avg_value)
     return SymbolContext(
         prev_close=prev_close,
         prev_day_change_pct=prev_day_pct,
         high_52w=float(window["high"].max()),
         low_52w=float(window["low"].min()),
+        avg_daily_value=avg_value,
     )
 
 
@@ -193,8 +220,12 @@ class VolumeSpikeDetector:
         mult: float = 2.0,
         skip_opening_candle: bool = True,
         close_for: Callable[[str], dtime] | None = None,
+        min_ema: dict[int, float] | None = None,
     ) -> None:
         self.timeframes = list(timeframes)
+        # Per-timeframe floor on the prior EMA (shares/candle): a 3x spike on
+        # a stock that averages 5k shares a candle is noise, not interest.
+        self.min_ema = dict(min_ema or {})
         # Per-symbol continuous close (CAS stocks stop at 15:15).
         self.close_for = close_for or (lambda _s: CONTINUOUS_CLOSE_NON_CAS)
         self.ema_period = max(1, int(ema_period))
@@ -315,6 +346,8 @@ class VolumeSpikeDetector:
         self._fold(st, volume)
         if prior_ema is None or prior_ema <= 0 or prior_samples < self.ema_period:
             return None
+        if prior_ema < self.min_ema.get(tf, 0.0):
+            return None
         mult = volume / prior_ema
         if mult <= self.mult:
             return None
@@ -380,12 +413,20 @@ class SignalMonitor:
     ema_period: int = 21
     volume_mult: float = 2.0
     skip_opening_candle: bool = True
+    # Volume spikes only for stocks trading ≥ this ₹ value/day on average (0 = off)
+    min_avg_daily_value: float = 0.0
+    # Per-timeframe floor on the candle-volume EMA, shares ({5: 200_000, …})
+    min_ema: dict[int, float] = field(default_factory=dict)
+    # Volume spikes only for stocks with market cap ≥ this, ₹ crore (0 = off)
+    min_market_cap_cr: float = 0.0
     volume_enabled: bool = True
     breakout_enabled: bool = True
     fo_symbols: set[str] = field(default_factory=set)
     asm_symbols: set[str] = field(default_factory=set)
     contexts: dict[str, SymbolContext] = field(default_factory=dict)
     clock: SessionClock | None = None
+    #: symbol → market cap ₹ crore; None until loaded (see SignalSeeder)
+    market_caps: dict[str, float] | None = None
 
     def __post_init__(self) -> None:
         if self.clock is None:
@@ -396,6 +437,7 @@ class SignalMonitor:
             mult=self.volume_mult,
             skip_opening_candle=self.skip_opening_candle,
             close_for=self.clock.continuous_close,
+            min_ema=self.min_ema,
         )
         self.breakout = BreakoutDetector(self.state_path)
 
@@ -405,6 +447,26 @@ class SignalMonitor:
 
     def set_context(self, symbol: str, ctx: SymbolContext) -> None:
         self.contexts[symbol] = ctx
+
+    def _volume_eligible(self, symbol: str) -> bool:
+        """Traded-value and market-cap floors for volume spikes (not 52w).
+
+        A stock whose value or market cap is unknown counts as failing —
+        the floors exist to keep thin/small names quiet. The one exception:
+        if no market caps could be loaded at all (e.g. Yahoo down), the
+        market-cap floor is skipped rather than silencing every alert.
+        """
+        if self.min_avg_daily_value > 0:
+            ctx = self.contexts.get(symbol)
+            if not (
+                ctx and ctx.avg_daily_value and ctx.avg_daily_value >= self.min_avg_daily_value
+            ):
+                return False
+        if self.min_market_cap_cr > 0 and self.market_caps:
+            cap = self.market_caps.get(symbol.upper())
+            if cap is None or cap < self.min_market_cap_cr:
+                return False
+        return True
 
     def _signal(self, kind: str, symbol: str, ltp: float, now: datetime, **extra: Any) -> Signal:
         return Signal(
@@ -431,7 +493,11 @@ class SignalMonitor:
         now = now or datetime.now(timezone.utc)
         out: list[Signal] = []
         if self.volume_enabled and volume is not None:
+            # The detector always runs (its EMA must stay current); the floor
+            # only decides whether a spike is reported.
             for candle in self.volume.on_tick(symbol, volume, now):
+                if not self._volume_eligible(symbol):
+                    continue
                 out.append(
                     self._signal(
                         VOLUME_SPIKE,
@@ -589,6 +655,8 @@ class SignalSeeder:
         started = time.monotonic()
         ok = failed = 0
         total = len(self.instruments)
+        if self.monitor.volume_enabled and self.monitor.min_market_cap_cr > 0:
+            self._load_market_caps()
         logger.info("Signal history: loading %d symbols in background", total)
         for i, inst in enumerate(self.instruments, start=1):
             if self._stop.is_set():
@@ -609,6 +677,29 @@ class SignalSeeder:
             ok,
             failed,
             time.monotonic() - started,
+        )
+
+    def _load_market_caps(self) -> None:
+        """Market caps (₹ Cr) via Yahoo, cached daily next to the screener's."""
+        from nse_alert.screener.market_cap import fetch_market_caps_yfinance
+
+        try:
+            caps = fetch_market_caps_yfinance(
+                [i.symbol for i in self.instruments],
+                cache_path=self.daily_cache_dir.parent / "market_caps.csv",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Market caps unavailable (%s) — market-cap floor skipped", exc)
+            return
+        if not caps:
+            logger.error("Market caps unavailable — market-cap floor skipped")
+            return
+        self.monitor.market_caps = caps
+        missing = len(self.instruments) - len(caps)
+        logger.info(
+            "Market caps: %d loaded, %d missing (no volume alerts for those)",
+            len(caps),
+            missing,
         )
 
     def seed_symbol(self, inst: Instrument) -> None:
@@ -670,3 +761,149 @@ class SignalSeeder:
             candles.append((ts, int(row.get("volume") or 0)))
         candles.sort(key=lambda c: c[0])
         return candles
+
+
+class SignalDigest:
+    """Pool signals and release them once per clock-aligned N-minute window.
+
+    Windows are aligned to the IST clock (09:15, 09:30, … for 15 min), and a
+    window is released on the first tick after it ends — so a 52w breakout at
+    10:02 arrives in the 10:00–10:15 digest at ~10:15:00.
+    """
+
+    def __init__(self, minutes: int) -> None:
+        self.minutes = max(1, int(minutes))
+        self._items: list[Signal] = []
+
+    def _slot(self, dt: datetime) -> tuple[date, int]:
+        ist = to_ist(dt)
+        return ist.date(), (ist.hour * 60 + ist.minute) // self.minutes
+
+    def slot_start(self, dt: datetime) -> datetime:
+        ist = to_ist(dt)
+        _, idx = self._slot(ist)
+        return ist.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+            minutes=idx * self.minutes
+        )
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def add(self, sig: Signal) -> None:
+        self._items.append(sig)
+
+    def pop_due(self, now: datetime) -> list[Signal]:
+        if not self._items or self._slot(now) <= self._slot(self._items[0].fired_at):
+            return []
+        return self.pop_all()
+
+    def pop_all(self) -> list[Signal]:
+        items, self._items = self._items, []
+        return items
+
+
+#: One digest entry: (signal, [(side, pending_id), …], note-or-None).
+DigestEntry = tuple[Signal, list[tuple[str, str]], str | None]
+
+_DIGEST_CHUNK_CHARS = 3500  # Telegram caps a message at 4096
+_SUMMARY_NAMES = 12
+
+
+def _digest_entry_html(sig: Signal, offers: list[tuple[str, str]], note: str | None) -> str:
+    from html import escape
+
+    ctx = sig.context
+    sym = f"<b>{escape(sig.symbol)}</b>"
+    at = f"{to_ist(sig.fired_at):%H:%M}"
+    day = f"Day <code>{sig.day_change_pct:+.2f}%</code>"
+    yday = (
+        f"Yday close <code>{_fmt_px(sig.prev_close)}</code> "
+        f"(<code>{_fmt_pct(ctx.prev_day_change_pct if ctx else None)}</code>)"
+    )
+    if sig.kind == VOLUME_SPIKE:
+        lines = [
+            f"📊 {sym} <code>{sig.volume_mult:.2f}x</code> vol · {sig.timeframe_min}m · {at}",
+            f"Price <code>{_fmt_px(sig.ltp)}</code> · {day}",
+            f"52w high <code>{_fmt_px(ctx.high_52w if ctx else None)}</code>",
+            yday,
+        ]
+    else:
+        icon, label = ("🚀", "52W HIGH") if sig.kind == HIGH_52W else ("🔻", "52W LOW")
+        moved = (sig.ltp / sig.level - 1.0) * 100.0 if sig.level else 0.0
+        lines = [
+            f"{icon} {sym} {label} · {at}",
+            f"Broke <code>{_fmt_px(sig.level)}</code> at <code>{_fmt_px(sig.ltp)}</code> "
+            f"({moved:+.2f}%) · {day}",
+            f"52w H/L <code>{_fmt_px(ctx.high_52w if ctx else None)}</code> / "
+            f"<code>{_fmt_px(ctx.low_52w if ctx else None)}</code>",
+            yday,
+        ]
+    tags = [t for t, on in (("F&O", sig.is_fno), ("ASM", sig.is_asm)) if on]
+    if tags:
+        lines[0] += f" · {escape(' · '.join(tags))}"
+    if offers:
+        lines.append(" · ".join(f"{side} <code>/confirm {pid}</code>" for side, pid in offers))
+    elif note:
+        lines.append(f"<i>{escape(note)}</i>")
+    return "\n".join(lines)
+
+
+def _digest_summary(entries: list[DigestEntry]) -> list[str]:
+    from html import escape
+
+    groups: list[tuple[str, str, list[str]]] = [
+        (HIGH_52W, "🚀 52W highs", []),
+        (LOW_52W, "🔻 52W lows", []),
+        (VOLUME_SPIKE, "📊 Volume spikes", []),
+    ]
+    for sig, _, _ in entries:
+        for kind, _, names in groups:
+            if sig.kind == kind:
+                detail = (
+                    f"{sig.volume_mult:.1f}x" if kind == VOLUME_SPIKE else f"{sig.day_change_pct:+.1f}%"
+                )
+                names.append(f"{escape(sig.symbol)} {detail}")
+    out: list[str] = []
+    for _, label, names in groups:
+        if not names:
+            continue
+        shown = ", ".join(names[:_SUMMARY_NAMES])
+        more = f", +{len(names) - _SUMMARY_NAMES} more" if len(names) > _SUMMARY_NAMES else ""
+        out.append(f"{label} ({len(names)}): {shown}{more}")
+    return out
+
+
+def format_signal_digest(
+    entries: list[DigestEntry], *, start: datetime, end: datetime
+) -> list[str]:
+    """Telegram HTML messages for one digest window.
+
+    Visible part: one summary line per signal type. Per-stock details and
+    the /confirm commands sit in a collapsed ("expandable") quote, so a busy
+    window stays one short message in the chat. Split into several messages
+    only when the details exceed Telegram's length limit.
+    """
+    blocks = [_digest_entry_html(*e) for e in entries]
+    chunks: list[list[int]] = [[]]
+    size = 0
+    for i, block in enumerate(blocks):
+        if chunks[-1] and size + len(block) > _DIGEST_CHUNK_CHARS:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(i)
+        size += len(block) + 2
+
+    window = f"{to_ist(start):%H:%M}–{to_ist(end):%H:%M} IST"
+    has_offers = any(offers for _, offers, _ in entries)
+    messages: list[str] = []
+    for n, idxs in enumerate(chunks, start=1):
+        part = f" ({n}/{len(chunks)})" if len(chunks) > 1 else ""
+        lines = [f"<b>📋 Signals {window}{part}</b>"]
+        lines += _digest_summary([entries[i] for i in idxs])
+        lines.append(
+            "<blockquote expandable>" + "\n\n".join(blocks[i] for i in idxs) + "</blockquote>"
+        )
+        if has_offers:
+            lines.append("<i>Tap the quote for details + /confirm ids · qty sized at confirm; SL attached</i>")
+        messages.append("\n".join(lines))
+    return messages
