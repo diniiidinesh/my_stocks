@@ -100,6 +100,9 @@ class PendingOrder:
     alert_threshold: float
     alert_direction: str
     entry_ltp: float = 0.0
+    # "threshold" (±% alert) or "signal" (volume spike / 52w offer). Signal
+    # offers are optional by design, so their expiry is not alerted on.
+    source: str = "threshold"
 
 
 def format_expiry_message(item: PendingOrder) -> str:
@@ -201,9 +204,11 @@ class OrderBook:
         mode: str,
         product: str = "MIS",
         circuit_limit: float | None = None,
+        side: str = "BUY",
     ) -> None:
         self._data["positions"][symbol.upper()] = {
             "status": "open",
+            "side": side.upper(),
             "quantity": quantity,
             "entry_price": entry_price,
             "stop_price": stop_price,
@@ -269,6 +274,7 @@ class OrderBook:
         alert_direction: str,
         entry_ltp: float,
         ttl_minutes: int = 30,
+        source: str = "threshold",
     ) -> PendingOrder:
         now = datetime.now(timezone.utc)
         pending_id = secrets.token_hex(3).upper()
@@ -283,6 +289,7 @@ class OrderBook:
             alert_threshold=alert_threshold,
             alert_direction=alert_direction,
             entry_ltp=float(entry_ltp),
+            source=source,
         )
         self._data["pending"][pending_id] = asdict(item)
         self._save()
@@ -591,6 +598,39 @@ class OrderExecutor:
             ).strip(),
         )
 
+    def build_short_stop_request(
+        self,
+        *,
+        symbol: str,
+        quantity: int,
+        product: str,
+        entry_price: float,
+        reference_ltp: float | None = None,
+        market_protection: int = 2,
+    ) -> OrderRequest:
+        """BUY SL-Limit above a SELL (short) entry — mirror of ``build_stop_request``."""
+        ref = reference_ltp if reference_ltp is not None else entry_price
+        trigger = round_tick(entry_price * (1.0 + self.stop_loss_pct / 100.0))
+        # Kite rejects a buy SL whose trigger is at/below the reference LTP.
+        if ref > 0 and trigger <= ref:
+            trigger = round_tick(ref + NSE_TICK)
+        limit_px = round_tick(trigger + self.stop_limit_ticks * NSE_TICK)
+        return OrderRequest(
+            symbol=symbol,
+            side="BUY",
+            quantity=max(1, int(quantity)),
+            product=product,
+            order_type="SL",
+            price=limit_px,
+            trigger_price=trigger,
+            market_protection=market_protection,
+            tag="nseasl",
+            reason=(
+                f"SL-Limit {self.stop_loss_pct:g}% above short entry {entry_price:.2f} "
+                f"(trigger={trigger:.2f}, limit={limit_px:.2f})"
+            ),
+        )
+
     def _wait_for_entry_fill(
         self,
         order_id: str,
@@ -683,7 +723,7 @@ class OrderExecutor:
         if not self.book or not self.trail_breakeven:
             return None
         pos = self.book.get_position(symbol)
-        if not pos or pos.get("breakeven_armed"):
+        if not pos or pos.get("breakeven_armed") or pos.get("side") == "SELL":
             return None
         stop_id = pos.get("stop_order_id")
         if not stop_id:
@@ -769,7 +809,7 @@ class OrderExecutor:
         if not self.book or not self.exit_on_upper_circuit:
             return None
         pos = self.book.get_position(symbol)
-        if not pos:
+        if not pos or pos.get("side") == "SELL":
             return None
         if ltp <= 0:
             return None
@@ -991,19 +1031,40 @@ class OrderExecutor:
         *,
         entry_ltp: float,
         force_mode: str | None = None,
+        protect_short: bool = False,
     ) -> tuple[OrderResult, OrderResult | None]:
         """BUY entry, wait for fill, then attach a SELL SL-Limit (MIS).
 
         Uses **fill price** (not alert LTP) for the stop. Stops do not
         consume the daily **entry** cap. Prefer ``TRADE_PRODUCT=MIS`` —
         CNC sell-SL right after a buy often fails (no same-day holdings).
+
+        SELL entries get no stop unless ``protect_short`` is set (signal
+        orders), in which case a BUY SL-Limit is placed above the fill.
         """
         mode = force_mode or self.mode
+        if (
+            protect_short
+            and request.side == "SELL"
+            and self.book
+            and self.book.has_open_position(request.symbol)
+        ):
+            return (
+                OrderResult(
+                    False,
+                    mode,
+                    request,
+                    None,
+                    f"Open position already exists for {request.symbol}",
+                    datetime.now(timezone.utc),
+                ),
+                None,
+            )
         entry = self.place(request, force_mode=mode, toward_daily_cap=True)
         if not entry.ok:
             return entry, None
 
-        if request.side != "BUY":
+        if request.side != "BUY" and not protect_short:
             return entry, None
 
         if mode == "dry_run":
@@ -1018,7 +1079,10 @@ class OrderExecutor:
         else:
             fill_price, fill_qty = entry_ltp, request.quantity
 
-        sl_req = self.build_stop_request(
+        stop_builder = (
+            self.build_stop_request if request.side == "BUY" else self.build_short_stop_request
+        )
+        sl_req = stop_builder(
             symbol=request.symbol,
             quantity=fill_qty,
             product=request.product,
@@ -1040,7 +1104,7 @@ class OrderExecutor:
             limit_px = float(sl_req.price or self.stop_limit_price_from_trigger(trigger))
             circuit_limit = (
                 self.fetch_upper_circuit_limit(request.symbol)
-                if self.exit_on_upper_circuit
+                if self.exit_on_upper_circuit and request.side == "BUY"
                 else None
             )
             self.book.record_position(
@@ -1054,5 +1118,6 @@ class OrderExecutor:
                 mode=mode,
                 product=request.product,
                 circuit_limit=circuit_limit,
+                side=request.side,
             )
         return entry, sl

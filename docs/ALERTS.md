@@ -15,6 +15,29 @@ State file: `.nse_alert/fired.json` (events + dedupe keys).
 
 If price jumps past several levels in one tick (e.g. +3% → +12% with `4,7,11`), each newly crossed level fires in ascending order. Already-fired levels are skipped.
 
+Volume-spike and 52-week breakout alerts are a separate rule set: see [SIGNALS.md](SIGNALS.md).
+
+## Market close (CAS, since 3 Aug 2026)
+
+SEBI's Closing Auction Session changed the NSE cash-market close **per stock**:
+
+| Stocks | Continuous trading | After that | Zerodha MIS square-off |
+|--------|--------------------|------------|------------------------|
+| **F&O stocks** (CAS) | 09:15–**15:15** | Closing auction 15:15–15:35 (orders 15:20–15:30, random close 15:28–15:30, ±3% band); close price = auction price | **15:12** |
+| Non-F&O stocks | 09:15–15:30 (unchanged) | VWAP close as before | **15:25** |
+
+Post-close session for both is now 15:50–16:00. F&O *contracts* trade until 15:40.
+
+What the watcher does with it (`session.py`):
+
+- **No fresh intraday entries after the MIS cutoff.** This applies to auto trades, `confirm` prompts, signal offers, and `/confirm` replies. Alerts still fire, and a `⏰ … past MIS entry cutoff` note explains why no order was made. The cutoffs are configurable (`MIS_CUTOFF_CAS_HHMM`, `MIS_CUTOFF_NON_CAS_HHMM`) in case Zerodha moves them. CNC entries are allowed until the stock's continuous close.
+- **Volume candles and 52-week checks stop at each stock's continuous close.** That's 15:15 for F&O stocks, so auction prints never count as a spike or a breakout.
+- The F&O list comes from Kite `instruments("NFO")`, which is now always loaded in live mode. If it fails to load, **every** stock gets the earlier CAS times.
+- Unchanged: ±% threshold *alerts* still fire until 15:30 (and on auction prints), feed-health alerts cover 09:15–15:30, and the EOD report/screener still run at 15:40, after the auction has matched.
+- The mock feed ignores the cutoffs, so demo trades still work at any hour.
+
+Sources: [Zerodha market timings](https://support.zerodha.com/category/trading-and-markets/trading-faqs/market-sessions/articles/what-are-the-market-timings), [Zerodha auto square-off timings](https://support.zerodha.com/category/trading-and-markets/trading-faqs/market-sessions/articles/intraday-auto-square-off-timings).
+
 ## Thresholds
 
 | Env | Example | Meaning |

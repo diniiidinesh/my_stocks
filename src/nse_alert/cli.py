@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import signal
 import time
+from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -28,6 +29,13 @@ from nse_alert.report import (
     format_day_report,
     load_events,
     write_day_report,
+)
+from nse_alert.session import SessionClock
+from nse_alert.signals import (
+    Signal,
+    SignalMonitor,
+    SignalSeeder,
+    format_signal_message,
 )
 from nse_alert.surveillance import load_asm_symbols, load_nfo_equity_underlyings
 from nse_alert.trailing import TrailingStopRunner
@@ -112,6 +120,10 @@ def watch_cmd(
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    try:
+        volume_timeframes = settings.volume_spike_timeframe_list
+    except ValueError as exc:
+        raise click.ClickException(f"VOLUME_SPIKE_TIMEFRAMES: {exc}") from exc
 
     lock_fh = acquire_single_instance(settings.state_dir)
 
@@ -167,17 +179,22 @@ def watch_cmd(
     fo_symbols: set[str] = set()
     asm_symbols: set[str] = set()
     fo_only = settings.fo_only_threshold_list
+    fo_known = True
+    kite = None
     if use_kite:
         kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
-        if fo_only:
-            try:
-                fo_symbols = load_nfo_equity_underlyings(kite)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Could not load NFO underlyings (%s); FO-only thresholds disabled",
-                    exc,
-                )
-                fo_only = []
+        # Always loaded now: F&O stocks are the closing-auction (CAS) stocks
+        # with the earlier 15:15 close / 15:12 MIS cutoff (session.py).
+        try:
+            fo_symbols = load_nfo_equity_underlyings(kite)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not load NFO underlyings (%s); FO-only thresholds disabled, "
+                "every symbol gets the CAS (15:12 MIS) cutoff",
+                exc,
+            )
+            fo_only = []
+            fo_known = False
         asm_symbols = load_asm_symbols(
             url=settings.asm_sheet_url,
             cache_path=settings.state_dir / "asm_symbols.txt",
@@ -207,6 +224,96 @@ def watch_cmd(
         tg = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
 
     alert_count = {"n": 0}
+    clock = settings.session_clock(fo_symbols, fo_known=fo_known)
+
+    def _entry_cutoff_note(symbol: str) -> str | None:
+        """Why a fresh entry can't be placed now, or None if it can."""
+        if not use_kite:
+            return None  # synthetic mock prices: demo trades at any hour
+        now = datetime.now(timezone.utc)
+        if clock.entries_open(symbol, now, product=executor.product):
+            return None
+        kind = "F&O/CAS" if clock.is_cas(symbol) else "non-F&O"
+        cutoff = (
+            clock.mis_cutoff(symbol)
+            if executor.product == "MIS"
+            else clock.continuous_close(symbol)
+        )
+        return f"past {executor.product} entry cutoff {cutoff:%H:%M} IST ({kind} stock)"
+
+    signal_monitor: SignalMonitor | None = None
+    signal_seeder: SignalSeeder | None = None
+    if settings.volume_spike_enabled or settings.breakout_52w_enabled:
+        signal_monitor = SignalMonitor(
+            prev_closes=prev_closes,
+            state_path=settings.state_dir / "signals.json",
+            timeframes=volume_timeframes,
+            ema_period=settings.volume_spike_ema_period,
+            volume_mult=settings.volume_spike_mult,
+            skip_opening_candle=settings.volume_spike_skip_opening_candle,
+            volume_enabled=settings.volume_spike_enabled,
+            breakout_enabled=settings.breakout_52w_enabled,
+            fo_symbols=fo_symbols,
+            asm_symbols=asm_symbols,
+            clock=clock,
+        )
+        if kite is not None:
+            signal_seeder = SignalSeeder(
+                kite=kite,
+                instruments=instruments,
+                monitor=signal_monitor,
+                # Shared with the EOD screener, so the evening run warms it.
+                daily_cache_dir=settings.state_dir / "screener" / "history",
+            )
+        else:
+            logger.info(
+                "Volume-spike / 52w signals need Kite history; idle on the mock feed"
+            )
+    signal_sides = settings.signal_order_side_list
+    signal_offers_on = bool(
+        signal_monitor is not None
+        and settings.signal_orders_enabled
+        and executor.enabled()
+        and signal_sides
+    )
+    # Any pending order (threshold confirm or signal offer) needs the listener.
+    listener_wanted = executor.mode == "confirm" or signal_offers_on
+    last_ltp: dict[str, float] = {}
+
+    def _handle_signal(sig: Signal) -> None:
+        offers: list[tuple[str, str]] = []
+        cutoff_note = _entry_cutoff_note(sig.symbol) if signal_offers_on else None
+        if signal_offers_on and cutoff_note is None:
+            for side in signal_sides:
+                req = OrderRequest(
+                    symbol=sig.symbol,
+                    side=side,  # type: ignore[arg-type]
+                    quantity=0,  # sized at confirm, off the then-current LTP
+                    product=executor.product,
+                    order_type=executor.order_type,
+                    price=None,
+                    trigger_price=None,
+                    market_protection=executor.market_protection,
+                    tag="nsesig",
+                    reason=f"{sig.kind} signal @ {sig.ltp:.2f}",
+                )
+                pending = book.add_pending(
+                    req,
+                    alert_symbol=sig.symbol,
+                    alert_threshold=0.0,
+                    alert_direction=sig.kind,
+                    entry_ltp=sig.ltp,
+                    ttl_minutes=settings.trade_confirm_ttl_minutes,
+                    source="signal",
+                )
+                offers.append((side, pending.id))
+        msg = format_signal_message(
+            sig, offers=offers, note=f"No order offer: {cutoff_note}" if cutoff_note else None
+        )
+        if tg:
+            tg.send_text(msg, parse_mode="Markdown")
+        else:
+            click.echo(msg)
 
     def _handle_trade(alert: object) -> None:
         from nse_alert.engine import Alert as AlertType
@@ -215,6 +322,13 @@ def watch_cmd(
         if not executor.should_trade_alert(
             direction=alert.direction, threshold_pct=alert.threshold_pct
         ):
+            return
+        cutoff_note = _entry_cutoff_note(alert.symbol)
+        if cutoff_note:
+            msg = f"⏰ {alert.symbol} trade skipped: {cutoff_note}"
+            logger.info("%s", msg)
+            if tg:
+                tg.send_text(msg)
             return
         try:
             req = executor.build_request_from_alert(
@@ -275,7 +389,9 @@ def watch_cmd(
         if now - _last_expiry_sweep["t"] < EXPIRY_SWEEP_INTERVAL_SEC:
             return
         _last_expiry_sweep["t"] = now
-        newly = book.sweep_expired()
+        # Signal offers are optional by nature — expiring unanswered is the
+        # normal case, not an incident, so only threshold orders alert.
+        newly = [i for i in book.sweep_expired() if i.source != "signal"]
         if not newly:
             return
         if len(newly) > 3:
@@ -290,7 +406,8 @@ def watch_cmd(
             if tg:
                 tg.send_text(msg)
 
-    def on_tick(symbol: str, ltp: float) -> None:
+    def on_tick(symbol: str, ltp: float, volume: int | None = None) -> None:
+        last_ltp[symbol] = ltp
         trail_msg = executor.manage_open_stops(symbol, ltp)
         if trail_msg:
             logger.info("%s", trail_msg)
@@ -309,7 +426,10 @@ def watch_cmd(
             alert_count["n"] += len(alerts)
             for alert in alerts:
                 _handle_trade(alert)
-        if executor.mode == "confirm":
+        if signal_monitor is not None:
+            for sig in signal_monitor.on_tick(symbol, ltp, volume):
+                _handle_signal(sig)
+        if listener_wanted:
             _sweep_expired_orders()
 
     threshold_label = ",".join(f"{t:g}" for t in thresholds)
@@ -322,7 +442,7 @@ def watch_cmd(
     logger.info(
         "Watching %d symbols | thresholds=±%s%% | fo_only=±%s%% (%d F&O) | "
         "asm=%d | feed=%s | telegram=%s | trade=%s | sizing=%s budget=₹%.0f | %s | "
-        "orders=%s",
+        "signals=%s | orders=%s",
         len(instruments),
         threshold_label,
         fo_only_label,
@@ -334,6 +454,7 @@ def watch_cmd(
         executor.sizing_mode,
         executor.margin_budget_inr,
         qty_note,
+        _signals_label(settings, volume_timeframes, signal_offers_on),
         (settings.state_dir / "orders.json").resolve(),
     )
 
@@ -361,6 +482,7 @@ def watch_cmd(
             on_tick=on_tick,
             on_health_alert=_feed_health_alert,
             on_feed_dead=_feed_dead,
+            mode="quote" if settings.volume_spike_enabled else "ltp",
         )
     else:
         price_feed = MockFeed(
@@ -374,7 +496,15 @@ def watch_cmd(
     confirm_listener: TelegramConfirmListener | None = None
 
     def _on_confirm(pending_id: str) -> None:
-        _confirm_pending(settings, executor, book, pending_id, tg)
+        _confirm_pending(
+            settings,
+            executor,
+            book,
+            pending_id,
+            tg,
+            ltp_lookup=last_ltp.get,
+            clock=clock if use_kite else None,
+        )
 
     def _on_cancel(pending_id: str) -> None:
         item = book.mark_pending(pending_id, "cancelled")
@@ -388,11 +518,13 @@ def watch_cmd(
         price_feed.stop()
         if confirm_listener:
             confirm_listener.stop()
+        if signal_seeder:
+            signal_seeder.stop()
 
     signal.signal(signal.SIGINT, _handle_sig)
     signal.signal(signal.SIGTERM, _handle_sig)
 
-    if executor.mode == "confirm" and settings.telegram_configured:
+    if listener_wanted and settings.telegram_configured:
         confirm_listener = TelegramConfirmListener(
             bot_token=settings.telegram_bot_token,
             chat_id=settings.telegram_chat_id,
@@ -402,6 +534,8 @@ def watch_cmd(
         )
         confirm_listener.start()
 
+    if signal_seeder:
+        signal_seeder.start()
     price_feed.start()
     try:
         if use_kite:
@@ -415,6 +549,8 @@ def watch_cmd(
         price_feed.stop()
         if confirm_listener:
             confirm_listener.stop()
+        if signal_seeder:
+            signal_seeder.stop()
         release_single_instance(lock_fh)
 
     logger.info("Done. Alerts fired this run: %d", alert_count["n"])
@@ -425,8 +561,30 @@ def watch_cmd(
         raise SystemExit(1)
 
 
+def _signals_label(
+    settings: Settings, timeframes: list[int], offers_on: bool
+) -> str:
+    parts: list[str] = []
+    if settings.volume_spike_enabled:
+        tfs = ",".join(f"{t}m" for t in timeframes)
+        parts.append(
+            f"vol>{settings.volume_spike_mult:g}xEMA{settings.volume_spike_ema_period}"
+            f"@{tfs}"
+        )
+    if settings.breakout_52w_enabled:
+        parts.append("52w")
+    if not parts:
+        return "off"
+    return "+".join(parts) + (" (orders via /confirm)" if offers_on else " (alerts only)")
+
+
 def _in_ist_market_hours(now_utc: datetime | None = None) -> bool:
-    """Mon-Fri 09:15-15:30 IST. Fixed +5:30 offset — no DST, no tzdata needed."""
+    """Mon-Fri 09:15-15:30 IST. Fixed +5:30 offset — no DST, no tzdata needed.
+
+    Deliberately the *latest* close (non-F&O stocks still trade to 15:30;
+    F&O stocks sit in the closing auction until 15:35) — this only gates
+    feed-health alerts, not trading. Per-symbol closes: ``session.py``.
+    """
     now_utc = now_utc or datetime.now(timezone.utc)
     ist = now_utc + timedelta(hours=5, minutes=30)
     if ist.weekday() >= 5:  # Sat=5, Sun=6
@@ -484,6 +642,9 @@ def _confirm_pending(
     book: OrderBook,
     pending_id: str,
     tg: TelegramNotifier | None,
+    *,
+    ltp_lookup: Callable[[str], float | None] | None = None,
+    clock: SessionClock | None = None,
 ) -> None:
     item = book.get_pending(pending_id)
     if item is None:
@@ -498,24 +659,63 @@ def _confirm_pending(
             tg.send_text(msg, parse_mode="Markdown")
         return
     req_data = item.request
+    symbol = str(req_data["symbol"])
+    side = req_data["side"]
+    product = str(req_data.get("product") or "MIS")
+    if clock is not None and not clock.entries_open(
+        symbol, datetime.now(timezone.utc), product=product
+    ):
+        cutoff = (
+            clock.mis_cutoff(symbol) if product.upper() == "MIS" else clock.continuous_close(symbol)
+        )
+        book.mark_pending(pending_id, "expired")
+        msg = (
+            f"⏰ `{pending_id}` {side} {symbol} not placed — past {product} entry "
+            f"cutoff {cutoff:%H:%M} IST"
+        )
+        logger.info("%s", msg)
+        if tg:
+            tg.send_text(msg, parse_mode="Markdown")
+        return
+    quantity = int(req_data["quantity"])
+    reason = str(req_data.get("reason") or "confirmed")
+    entry_ltp = float(item.entry_ltp or 0.0)
+    if entry_ltp <= 0:
+        entry_ltp = float(req_data.get("price") or 0.0) or 0.0
+    is_signal = item.source == "signal"
+    if is_signal:
+        # Signal offers can sit for up to the TTL — size and stop off the
+        # price now, not the price when the alert fired.
+        live = ltp_lookup(symbol) if ltp_lookup else None
+        if live and live > 0:
+            entry_ltp = float(live)
+    if quantity <= 0:
+        try:
+            quantity, size_note = executor.size_quantity(
+                symbol=symbol, price=entry_ltp or 1.0, side=side
+            )
+        except SizingRefusedError as exc:
+            msg = f"🔑 {symbol} {side} not placed: {exc}"
+            logger.error("%s", msg)
+            if tg:
+                tg.send_text(msg)
+            return
+        reason = f"{reason}; {size_note}"
     request = OrderRequest(
-        symbol=str(req_data["symbol"]),
-        side=req_data["side"],  # type: ignore[arg-type]
-        quantity=int(req_data["quantity"]),
+        symbol=symbol,
+        side=side,  # type: ignore[arg-type]
+        quantity=quantity,
         product=str(req_data["product"]),
         order_type=str(req_data["order_type"]),
         price=req_data.get("price"),  # type: ignore[arg-type]
         trigger_price=req_data.get("trigger_price"),  # type: ignore[arg-type]
         market_protection=int(req_data.get("market_protection") or 2),
         tag=str(req_data.get("tag") or "nsealrt"),
-        reason=str(req_data.get("reason") or "confirmed"),
+        reason=reason,
     )
     force = "dry_run" if executor.mode == "dry_run" else "auto"
-    entry_ltp = float(item.entry_ltp or 0.0)
-    if entry_ltp <= 0:
-        entry_ltp = float(req_data.get("price") or 0.0) or 0.0
     entry, sl = executor.place_entry_with_stop(
-        request, entry_ltp=entry_ltp or 0.01, force_mode=force
+        request, entry_ltp=entry_ltp or 0.01, force_mode=force, protect_short=is_signal
     )
     book.mark_pending(pending_id, "confirmed" if entry.ok else "pending")
     msg = entry.message
@@ -649,6 +849,17 @@ def report_cmd(report_date: object | None, telegram: bool) -> None:
         raise click.ClickException(
             "Telegram requested but TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are unset"
         )
+
+
+def _cli_session_clock(settings: Settings) -> SessionClock:
+    """Session clock for one-off CLI commands (F&O list from Kite if possible)."""
+    if settings.kite_api_key and settings.kite_access_token:
+        try:
+            kite = _kite_client(settings.kite_api_key, settings.kite_access_token)
+            return settings.session_clock(load_nfo_equity_underlyings(kite))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not load NFO underlyings (%s); using CAS cutoff", exc)
+    return settings.session_clock(fo_known=False)
 
 
 def _quote_ltp(settings: Settings, symbol: str) -> float:
@@ -827,10 +1038,15 @@ def pending_cmd() -> None:
         return
     for item in items:
         req = item.request
+        qty = req.get("quantity") or "(sized on confirm)"
+        origin = (
+            f"signal {item.alert_direction}"
+            if item.source == "signal"
+            else f"alert ±{item.alert_threshold:g}% {item.alert_direction}"
+        )
         click.echo(
-            f"{item.id}  {req.get('side')} {req.get('quantity')}x {req.get('symbol')}  "
-            f"(alert ±{item.alert_threshold:g}% {item.alert_direction})  "
-            f"expires {item.expires_at}"
+            f"{item.id}  {req.get('side')} {qty}x {req.get('symbol')}  "
+            f"({origin})  expires {item.expires_at}"
         )
 
 
@@ -846,7 +1062,15 @@ def confirm_cmd(pending_id: str) -> None:
         if settings.telegram_configured
         else None
     )
-    _confirm_pending(settings, executor, book, pending_id.upper(), tg)
+    _confirm_pending(
+        settings,
+        executor,
+        book,
+        pending_id.upper(),
+        tg,
+        ltp_lookup=lambda sym: _quote_ltp(settings, sym) or None,
+        clock=_cli_session_clock(settings),
+    )
     item = book.get_pending(pending_id)
     if item is None:
         raise click.ClickException(

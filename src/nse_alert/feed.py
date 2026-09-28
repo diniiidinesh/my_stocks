@@ -11,7 +11,8 @@ from nse_alert.universe import Instrument
 
 logger = logging.getLogger(__name__)
 
-TickHandler = Callable[[str, float], None]
+# on_tick(symbol, ltp) — plus ``volume=<day cumulative>`` in quote mode.
+TickHandler = Callable[..., None]
 
 
 class PriceFeed(Protocol):
@@ -106,6 +107,7 @@ class KiteFeed:
         on_health_alert: Callable[[str], None] | None = None,
         on_feed_dead: Callable[[str], None] | None = None,
         reconnect_alert_threshold: int = 3,
+        mode: str = "ltp",
     ) -> None:
         self.api_key = api_key
         self.access_token = access_token
@@ -114,6 +116,9 @@ class KiteFeed:
         self.on_health_alert = on_health_alert
         self.on_feed_dead = on_feed_dead
         self.reconnect_alert_threshold = reconnect_alert_threshold
+        # "quote" adds volume_traded (needed for volume-spike candles) at
+        # ~5x the bytes per tick of "ltp"; the 3000-token limit is the same.
+        self.mode = "quote" if mode == "quote" else "ltp"
         self._token_to_symbol = {i.instrument_token: i.symbol for i in instruments}
         self._ticker: Any = None
         self._last_close_reason = ""
@@ -144,14 +149,23 @@ class KiteFeed:
                 if token is None or ltp is None:
                     continue
                 symbol = self._token_to_symbol.get(int(token))
-                if symbol:
+                if not symbol:
+                    continue
+                volume = tick.get("volume_traded")
+                if self.mode == "quote" and volume is not None:
+                    self.on_tick(symbol, float(ltp), volume=int(volume))
+                else:
                     self.on_tick(symbol, float(ltp))
 
         def on_connect(ws: Any, _response: Any) -> None:
-            logger.info("KiteTicker connected; subscribing %d tokens (LTP)", len(tokens))
+            logger.info(
+                "KiteTicker connected; subscribing %d tokens (%s)",
+                len(tokens),
+                self.mode.upper(),
+            )
             self._reconnect_alerted = False
             ws.subscribe(tokens)
-            ws.set_mode(ws.MODE_LTP, tokens)
+            ws.set_mode(ws.MODE_QUOTE if self.mode == "quote" else ws.MODE_LTP, tokens)
 
         def on_close(_ws: Any, code: Any, reason: Any) -> None:
             self._last_close_reason = f"{code} {reason}"

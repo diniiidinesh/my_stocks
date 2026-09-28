@@ -24,6 +24,8 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_EXIT_ON_UPPER_CIRCUIT` | `true` | Exit at market when LTP hits the upper-circuit band |
 | `TRADE_UPPER_CIRCUIT_PCT` | `20` | Circuit band (% of prev close) that triggers the exit |
 | `TRADE_MAX_ORDERS_PER_DAY` | `10` | Entry-order cap (stops excluded) |
+| `MIS_CUTOFF_CAS_HHMM` | `1512` | No fresh MIS entries on F&O (CAS) stocks after this time (IST) |
+| `MIS_CUTOFF_NON_CAS_HHMM` | `1525` | Same, for non-F&O stocks |
 
 ## Flow
 
@@ -36,7 +38,7 @@ Optional. Alerts work with `TRADE_MODE=off`.
 7. On each tick: if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), **modify** stop to entry (cost-to-cost)
 8. On each tick: if LTP reaches the circuit price from step 6, cancel the resting stop and **exit at market** immediately
 
-Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY`. One open position per symbol/day.
+No new entry is placed or confirmed after the stock's MIS cutoff (15:12 for F&O stocks and 15:25 for the rest, since the Aug 2026 closing auction; see [ALERTS.md](ALERTS.md#market-close-cas-since-3-aug-2026)). You get a `⏰ … trade skipped` message instead. Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY`. One open position per symbol/day.
 
 ### Upper-circuit exit
 
@@ -143,6 +145,10 @@ CNC sell-SL right after a buy often fails (needs holdings). Same-day exit needs 
 | Cap=1 blocked SL | Stops excluded from daily entry cap |
 
 `THRESHOLD_PCT` must include `13` (or your `TRADE_ON_THRESHOLDS`) or the trade trigger never fires.
+
+## Signal orders (volume spike / 52-week)
+
+Volume-spike and 52-week alerts include `/confirm` BUY and SELL offers. These are sized at confirm time, and SELL entries get a BUY SL-Limit above the fill. The confirm listener then runs in `dry_run`/`auto` too. Full details: [SIGNALS.md](SIGNALS.md#ordering-from-telegram).
 
 ## Modes
 

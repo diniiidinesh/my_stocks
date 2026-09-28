@@ -10,6 +10,8 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | Test trades | BUY on **+13% UP** (MIS) + **2% SL-Limit**, margin-sized ≈ **₹10k** |
 | Cost-to-cost SL | Trail stop to entry after +2% from fill |
 | Upper-circuit exit | Market SELL when LTP hits +20% of prev close |
+| Volume spike | 5m candle volume > 2× its 21-EMA → alert + `/confirm` BUY/SELL |
+| 52-week breakout | LTP above prior 52w high / below 52w low → alert + `/confirm` BUY/SELL |
 | EOD alert report | Close % per scrip + hold-level counts |
 | EOD TA screener | Daily chart → Excel + Telegram (after 15:40 IST) |
 | Cloud | AWS Lightsail Mumbai (Oracle free if capacity allows) |
@@ -21,6 +23,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | **[docs/README.md](docs/README.md)** | Full index — start here to navigate the repo |
 | **[docs/ALERTS.md](docs/ALERTS.md)** | Thresholds, F&O filter, ASM tags, EOD reports |
 | **[docs/LOGIN.md](docs/LOGIN.md)** | Daily Kite token (`login` / `set-token`) |
+| **[docs/SIGNALS.md](docs/SIGNALS.md)** | Volume-spike + 52-week breakout alerts, ordering via `/confirm` |
 | **[docs/ORDERS.md](docs/ORDERS.md)** | Dry-run / confirm / auto, sizing, SL trail |
 | **[docs/SCREENER.md](docs/SCREENER.md)** | EOD TA screener → Excel + Telegram |
 | **[docs/TESTING_ORDERS.md](docs/TESTING_ORDERS.md)** | Order test cases + live handoff checklist |
