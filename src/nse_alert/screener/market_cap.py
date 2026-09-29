@@ -13,11 +13,16 @@ _NIFTY500_URL = "https://archives.nseindia.com/content/indices/ind_nifty500list.
 _SMALLCAP250_URL = (
     "https://archives.nseindia.com/content/indices/ind_niftysmallcap250list.csv"
 )
+# Recent/small listings (e.g. AZAD) sit here, not in Nifty 500 / Smallcap 250;
+# the market-cap floor still trims the true microcaps.
+_MICROCAP250_URL = (
+    "https://archives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv"
+)
 
 
 def load_index_symbols(urls: list[str] | None = None) -> set[str]:
-    """Nifty 500 ∪ Smallcap 250 — covers large/mid/small names."""
-    urls = urls or [_NIFTY500_URL, _SMALLCAP250_URL]
+    """Nifty 500 ∪ Smallcap 250 ∪ Microcap 250 — large/mid/small/micro names."""
+    urls = urls or [_NIFTY500_URL, _SMALLCAP250_URL, _MICROCAP250_URL]
     symbols: set[str] = set()
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "text/csv"}
     with httpx.Client(headers=headers, timeout=60.0, follow_redirects=True) as client:

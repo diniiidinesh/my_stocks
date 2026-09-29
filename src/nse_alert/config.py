@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     screen_min_market_cap_cr: float = Field(default=5000.0, alias="SCREEN_MIN_MARKET_CAP_CR")
     screen_min_turnover_cr: float = Field(default=10.0, alias="SCREEN_MIN_TURNOVER_CR")
     screen_min_price: float = Field(default=20.0, alias="SCREEN_MIN_PRICE")
-    screen_lookback_days: int = Field(default=20, alias="SCREEN_LOOKBACK_DAYS")
+    screen_lookback_days: int = Field(default=3, alias="SCREEN_LOOKBACK_DAYS")
     screen_volume_ema_period: int = Field(default=20, alias="SCREEN_VOLUME_EMA_PERIOD")
     screen_volume_mult: float = Field(default=1.5, alias="SCREEN_VOLUME_MULT")
     screen_supertrend_period: int = Field(default=10, alias="SCREEN_SUPERTREND_PERIOD")

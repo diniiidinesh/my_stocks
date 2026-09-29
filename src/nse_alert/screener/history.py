@@ -87,6 +87,9 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
             out.index = pd.to_datetime(out.index)
     out = out.sort_index()
     out = out[~out.index.duplicated(keep="last")]
+    # Yahoo can return a bar with volume but NaN OHLC; one NaN close poisons
+    # SuperTrend and the latest-bar checks, so drop it.
+    out = out.dropna(subset=["open", "high", "low", "close"])
     return out[need].astype(float)
 
 

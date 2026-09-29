@@ -8,9 +8,13 @@ All indicators use the **daily** chart only (Kite `"day"` / Yahoo `1d`).
 
 ## What it does
 
-1. Builds a universe from **Nifty 500 ∪ Smallcap 250**, then keeps names with
-   **market cap ≥ `SCREEN_MIN_MARKET_CAP_CR`** (default ₹5000 Cr) and
-   **turnover ≥ `SCREEN_MIN_TURNOVER_CR`** (default ₹10 Cr via Kite quotes).
+1. Builds a universe from **every NSE mainboard stock** (EQ/BE/BZ series) in the
+   session's full bhavcopy, keeps those with **turnover ≥ `SCREEN_MIN_TURNOVER_CR`**
+   (default ₹10 Cr), then **market cap ≥ `SCREEN_MIN_MARKET_CAP_CR`** (default ₹5000 Cr).
+   The turnover cut comes first so Yahoo market caps are only fetched for a few hundred
+   names. If no bhavcopy loads for the last 5 weekdays, it falls back to
+   **Nifty 500 ∪ Smallcap 250 ∪ Microcap 250**. With a Kite token, turnover is
+   re-checked from live quotes.
 2. Pulls **daily OHLCV** (Kite historical when logged in, else Yahoo) and caches under
    `STATE_DIR/screener/history/`. The cache is reused only when its last bar is on or after the latest completed NSE session (weekday after `SCREEN_AFTER_HHMM` / 15:40 IST); Friday’s bars stay valid through the weekend so Saturday does not refetch.
 3. Loads NSE **full bhavcopy** for delivery % on volume-spike days
@@ -23,7 +27,7 @@ All indicators use the **daily** chart only (Kite `"day"` / Yahoo `1d`).
 |------|---------|------|
 | Price > SuperTrend (10, 3) | on | **Mandatory** |
 | EMA20 > EMA50 > EMA200 | on | **Mandatory** |
-| Volume > 1.5× **volume EMA** on any of last 20 sessions | on | Optional (`SCREEN_REQUIRE_VOLUME`) |
+| Volume > 1.5× **volume EMA** on any of last 3 sessions | on | Optional (`SCREEN_REQUIRE_VOLUME`) |
 | ADX(14) > 25 | on | Optional |
 | RSI(14) between 40–60 | on | Optional |
 | MACD line > 0 | on | Optional |
@@ -34,7 +38,7 @@ All indicators use the **daily** chart only (Kite `"day"` / Yahoo `1d`).
 
 - Compare each session’s volume to that day’s **volume EMA** (`SCREEN_VOLUME_EMA_PERIOD`, default 20).
 - Spike if `volume > SCREEN_VOLUME_MULT × volume_EMA` (default **1.5×**).
-- Look back `SCREEN_LOOKBACK_DAYS` sessions; list **every** hit as `T-0`, `T-1`, … with multiple and vol vs EMA.
+- Look back `SCREEN_LOOKBACK_DAYS` sessions (default **3**: T-0, T-1, T-2); list **every** hit as `T-0`, `T-1`, … with multiple and vol vs EMA.
 
 ### Delivery (optional)
 
