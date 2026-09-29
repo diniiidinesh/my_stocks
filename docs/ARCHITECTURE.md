@@ -34,7 +34,8 @@ High-level map of the codebase. Prefer this over scrolling `src/` blindly.
 ### EOD technical screener (separate)
 
 ```text
-Nifty 500 ∪ Smallcap 250
+all NSE EQ/BE/BZ (bhavcopy, turnover ≥ floor)
+  (fallback: Nifty 500 ∪ Smallcap 250 ∪ Microcap 250)
       │
       ├─ market cap (Yahoo / cache)
       └─ turnover (Kite quotes when logged in)

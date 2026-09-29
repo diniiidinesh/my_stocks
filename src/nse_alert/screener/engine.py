@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,7 +17,7 @@ from nse_alert.screener.market_cap import (
     load_index_symbols,
     load_market_cap_file,
 )
-from nse_alert.universe import load_nse_eq_instruments
+from nse_alert.universe import load_nse_eq_instruments, load_prev_session_turnover_cr
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -28,7 +28,7 @@ class ScreenConfig:
     min_market_cap_cr: float = 5000.0
     min_turnover_cr: float = 10.0
     min_price: float = 20.0
-    lookback_days: int = 20
+    lookback_days: int = 3
     volume_ema_period: int = 20
     volume_mult: float = 1.5
     supertrend_period: int = 10
@@ -139,23 +139,60 @@ def _turnover_from_quotes(quote_map: dict[str, dict[str, Any]], symbol: str) -> 
     return last_price, turnover_cr
 
 
+def _session_turnover_cr(
+    state_dir: Path, *, after_hhmm: int, max_back: int = 5
+) -> tuple[date | None, dict[str, float]]:
+    """Turnover (₹ Cr) of every NSE EQ/BE/BZ stock from the newest bhavcopy.
+
+    Walks back a few weekdays so a holiday (no calendar) or a not-yet-published
+    bhavcopy falls through to the previous session instead of an empty universe.
+    """
+    day = latest_completed_nse_session(after_hhmm=after_hhmm)
+    for _ in range(max_back):
+        turnover = load_prev_session_turnover_cr(state_dir=state_dir, session_day=day)
+        if turnover:
+            return day, turnover
+        day -= timedelta(days=1)
+        while day.weekday() >= 5:
+            day -= timedelta(days=1)
+    return None, {}
+
+
 def _build_candidate_symbols(
     cfg: ScreenConfig,
     *,
     kite: Any | None,
     custom_symbols: list[str] | None,
+    session_turnover: dict[str, float] | None = None,
 ) -> tuple[list[str], dict[str, int], dict[str, str]]:
+    """Candidate symbols before the market-cap floor.
+
+    Default: every NSE mainboard stock in the session bhavcopy with turnover
+    ≥ ``min_turnover_cr`` — cheap, and keeps the Yahoo market-cap lookups to a
+    few hundred names. Falls back to the index lists when no bhavcopy loads.
+    """
     token_by: dict[str, int] = {}
     name_by: dict[str, str] = {}
 
     if custom_symbols:
         symbols = [s.upper() for s in custom_symbols]
+    elif session_turnover:
+        symbols = sorted(
+            s for s, t in session_turnover.items() if t >= cfg.min_turnover_cr
+        )
+        logger.info(
+            "Universe: %d NSE stocks in bhavcopy → %d with turnover >= %.1f Cr",
+            len(session_turnover),
+            len(symbols),
+            cfg.min_turnover_cr,
+        )
     else:
+        logger.warning("No bhavcopy turnover — falling back to index lists")
         index_syms = load_index_symbols()
         if not index_syms:
             raise RuntimeError(
-                "Could not load Nifty 500 / Smallcap 250 lists. "
-                "Set SCREEN_MARKET_CAP_FILE or CUSTOM_UNIVERSE_FILE."
+                "Could not load the NSE bhavcopy or the Nifty 500 / Smallcap 250 / "
+                "Microcap 250 lists. Set SCREEN_CUSTOM_UNIVERSE_FILE."
             )
         symbols = sorted(index_syms)
 
@@ -382,8 +419,14 @@ def run_screener(
     quote_map: dict[str, dict[str, Any]] | None = None,
 ) -> ScreenResult:
     """Scan universe, score criteria, return rows sorted with all-pass on top."""
+    session_turnover: dict[str, float] = {}
+    if not custom_symbols:
+        _, session_turnover = _session_turnover_cr(state_dir, after_hhmm=cfg.after_hhmm)
     symbols, token_by, name_by = _build_candidate_symbols(
-        cfg, kite=kite, custom_symbols=custom_symbols
+        cfg,
+        kite=kite,
+        custom_symbols=custom_symbols,
+        session_turnover=session_turnover,
     )
     logger.info("Screener candidates: %d symbols", len(symbols))
 
@@ -436,6 +479,8 @@ def run_screener(
         for sym in symbols:
             _, tovr = _turnover_from_quotes(quote_map, sym)
             turnovers[sym] = tovr
+    else:
+        turnovers = {s: session_turnover[s] for s in symbols if s in session_turnover}
 
     delivery_book = DeliveryBook(state_dir / "screener" / "bhavcopy")
     try:

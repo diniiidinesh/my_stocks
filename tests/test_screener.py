@@ -52,6 +52,26 @@ def test_volume_spikes_report_days_ago_and_multiples() -> None:
     assert max(s.multiple for s in spikes) > 1.5
 
 
+
+def test_default_lookback_is_last_three_sessions() -> None:
+    df = _synth_uptrend()  # spike at T-3
+    df.iloc[-2, df.columns.get_loc("volume")] = 4_000_000.0  # spike at T-1
+    row = evaluate_symbol(
+        "DEMO", df, cfg=ScreenConfig(min_price=1.0, require_delivery=False)
+    )
+    assert row is not None
+    assert row.vol_spike_days == "T-1"
+
+
+def test_normalize_drops_bars_with_nan_prices() -> None:
+    from nse_alert.screener.history import _normalize_ohlcv
+
+    df = _synth_uptrend(n=5)
+    df.iloc[-1, df.columns.get_indexer(["open", "high", "low", "close"])] = np.nan
+    out = _normalize_ohlcv(df)
+    assert len(out) == 4
+    assert out["close"].notna().all()
+
 def test_evaluate_ranks_all_pass_concept(tmp_path: Path) -> None:
     cfg = ScreenConfig(
         require_volume=True,
@@ -61,6 +81,7 @@ def test_evaluate_ranks_all_pass_concept(tmp_path: Path) -> None:
         require_near_52w=False,
         near_52w_high_pct=50.0,
         min_price=1.0,
+        lookback_days=20,
     )
     df = _synth_uptrend()
     row = evaluate_symbol("DEMO", df, cfg=cfg, market_cap_cr=6000, turnover_cr=20)
@@ -173,6 +194,7 @@ def test_delivery_filter_any_spike_ignores_missing() -> None:
         require_delivery=True,
         min_delivery_pct=40.0,
         min_price=1.0,
+        lookback_days=20,
     )
     row = evaluate_symbol("DEMO", df, cfg=cfg, delivery_book=book)  # type: ignore[arg-type]
     assert row is not None
@@ -312,3 +334,47 @@ def test_get_daily_history_refetches_when_session_newer(
     assert fetched == []
     assert again.index.max().date() == date(2026, 9, 17)
 
+
+
+def test_universe_is_all_bhavcopy_stocks_above_turnover_floor() -> None:
+    from nse_alert.screener.engine import _build_candidate_symbols
+
+    turnover = {"AZAD": 150.0, "RELIANCE": 900.0, "TINYCO": 0.4}
+    symbols, _, _ = _build_candidate_symbols(
+        ScreenConfig(min_turnover_cr=10.0),
+        kite=None,
+        custom_symbols=None,
+        session_turnover=turnover,
+    )
+    assert symbols == ["AZAD", "RELIANCE"]
+
+
+def test_universe_falls_back_to_index_lists_without_bhavcopy(monkeypatch) -> None:
+    from nse_alert.screener import engine
+
+    monkeypatch.setattr(engine, "load_index_symbols", lambda: {"SBIN", "TCS"})
+    symbols, _, _ = engine._build_candidate_symbols(
+        ScreenConfig(), kite=None, custom_symbols=None, session_turnover={}
+    )
+    assert symbols == ["SBIN", "TCS"]
+
+
+def test_session_turnover_walks_back_past_missing_bhavcopy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from nse_alert.screener import engine
+
+    seen: list[date] = []
+
+    def fake(*, state_dir, session_day):  # noqa: ANN001
+        seen.append(session_day)
+        return {"AZAD": 150.0} if len(seen) == 2 else {}
+
+    monkeypatch.setattr(engine, "load_prev_session_turnover_cr", fake)
+    monkeypatch.setattr(
+        engine, "latest_completed_nse_session", lambda **_: date(2026, 9, 28)
+    )  # Monday
+    day, turnover = engine._session_turnover_cr(tmp_path, after_hhmm=1540)
+    assert seen == [date(2026, 9, 28), date(2026, 9, 25)]  # skips the weekend
+    assert day == date(2026, 9, 25)
+    assert turnover == {"AZAD": 150.0}
