@@ -57,35 +57,67 @@ HIGH_52W = "HIGH_52W"
 LOW_52W = "LOW_52W"
 
 
-def parse_timeframes(raw: str | int | list[int]) -> list[int]:
-    """Parse ``"5"`` / ``"5,15"`` / ``[5, 15]`` into sorted candle minutes."""
-    if isinstance(raw, int):
-        values = [raw]
-    elif isinstance(raw, list):
-        values = [int(v) for v in raw]
-    else:
-        values = [int(part.strip()) for part in str(raw).split(",") if part.strip()]
-    bad = [v for v in values if v not in KITE_INTERVALS]
-    if bad:
+#: Timeframe id for the daily rule (``D`` in config): today's running
+#: volume vs the EMA of prior days' volume. Minutes in a day, so it sorts
+#: after every intraday timeframe.
+DAILY_TF = 1440
+_DAILY_NAMES = {"D", "DAY", "1D", "DAILY"}
+
+
+def _parse_tf(raw: str | int) -> int:
+    text = str(raw).strip().upper()
+    if text in _DAILY_NAMES:
+        return DAILY_TF
+    try:
+        tf = int(text)
+    except ValueError:
+        tf = -1
+    if tf not in KITE_INTERVALS:
         allowed = ",".join(str(k) for k in KITE_INTERVALS)
-        raise ValueError(f"Unsupported candle minutes {bad}; allowed: {allowed}")
-    return sorted(set(values))
+        raise ValueError(f"Unsupported timeframe {raw!r}; allowed: {allowed} or D (daily)")
+    return tf
 
 
-def parse_min_ema(raw: str) -> dict[int, float]:
-    """``"5:200000,15:1000000"`` → ``{5: 200000.0, 15: 1000000.0}`` (shares)."""
+def tf_label(tf: int) -> str:
+    return "D" if tf == DAILY_TF else f"{tf}m"
+
+
+def parse_timeframes(raw: str | int | list[int]) -> list[int]:
+    """Parse ``"5"`` / ``"5,15"`` / ``"D"`` / ``[5, 15]`` into sorted timeframes."""
+    if isinstance(raw, int):
+        parts: list[str | int] = [raw]
+    elif isinstance(raw, list):
+        parts = list(raw)
+    else:
+        parts = [part for part in str(raw).split(",") if part.strip()]
+    return sorted({_parse_tf(p) for p in parts})
+
+
+def parse_tf_values(raw: str, *, what: str = "value") -> tuple[float | None, dict[int, float]]:
+    """Per-timeframe numbers: ``"2.5"`` or ``"5:2.5,15:3,D:2"`` or ``"2.5,D:2"``.
+
+    Returns ``(default, {timeframe: value})``; a bare number is the default
+    for timeframes not listed.
+    """
+    default: float | None = None
     out: dict[int, float] = {}
     for part in str(raw or "").split(","):
         part = part.strip()
         if not part:
             continue
-        tf_raw, sep, floor_raw = part.partition(":")
+        tf_raw, sep, value_raw = part.partition(":")
         if not sep:
-            raise ValueError(f"expected MINUTES:SHARES, got {part!r}")
-        tf = int(tf_raw.strip())
-        if tf not in KITE_INTERVALS:
-            raise ValueError(f"unsupported candle minutes {tf}")
-        out[tf] = float(floor_raw.strip().replace("_", ""))
+            default = float(part.replace("_", ""))
+            continue
+        out[_parse_tf(tf_raw)] = float(value_raw.strip().replace("_", ""))
+    return default, out
+
+
+def parse_min_ema(raw: str) -> dict[int, float]:
+    """``"5:200000,15:1000000,D:1000000"`` → per-timeframe floors (shares)."""
+    default, out = parse_tf_values(raw, what="EMA floor")
+    if default is not None:
+        raise ValueError(f"expected TIMEFRAME:SHARES pairs, got {raw!r}")
     return out
 
 
@@ -130,9 +162,14 @@ class SymbolContext:
     # AVG_DAILY_VALUE_DAYS sessions — a share count would penalise
     # high-priced stocks (MARUTI trades ~0.4M shares but ~₹500 Cr/day).
     avg_daily_value: float | None = None
+    # EMA of daily volume (shares) through the previous session — the
+    # baseline for the daily (D) volume-spike rule.
+    daily_volume_ema: float | None = None
 
 
-def context_from_daily(df: pd.DataFrame, *, today: date) -> SymbolContext | None:
+def context_from_daily(
+    df: pd.DataFrame, *, today: date, ema_period: int = 21
+) -> SymbolContext | None:
     """Build a ``SymbolContext`` from daily OHLCV (DatetimeIndex, naive IST dates)."""
     if df is None or df.empty:
         return None
@@ -147,15 +184,21 @@ def context_from_daily(df: pd.DataFrame, *, today: date) -> SymbolContext | None
             prev_day_pct = (prev_close / before - 1.0) * 100.0
     recent = bars.tail(AVG_DAILY_VALUE_DAYS)
     avg_value = float((recent["close"] * recent["volume"]).mean())
+    vol_ema = (
+        float(bars["volume"].ewm(span=ema_period, adjust=False).mean().iloc[-1])
+        if len(bars) >= ema_period
+        else None  # too little history for a meaningful baseline
+    )
     window = bars[bars.index >= pd.Timestamp(today - timedelta(days=365))]
     if window.empty:
-        return SymbolContext(prev_close, prev_day_pct, None, None, avg_value)
+        return SymbolContext(prev_close, prev_day_pct, None, None, avg_value, vol_ema)
     return SymbolContext(
         prev_close=prev_close,
         prev_day_change_pct=prev_day_pct,
         high_52w=float(window["high"].max()),
         low_52w=float(window["low"].min()),
         avg_daily_value=avg_value,
+        daily_volume_ema=vol_ema,
     )
 
 
@@ -221,8 +264,11 @@ class VolumeSpikeDetector:
         skip_opening_candle: bool = True,
         close_for: Callable[[str], dtime] | None = None,
         min_ema: dict[int, float] | None = None,
+        mults: dict[int, float] | None = None,
     ) -> None:
         self.timeframes = list(timeframes)
+        # Per-timeframe multiplier overrides; ``mult`` covers the rest.
+        self.mults = dict(mults or {})
         # Per-timeframe floor on the prior EMA (shares/candle): a 3x spike on
         # a stock that averages 5k shares a candle is noise, not interest.
         self.min_ema = dict(min_ema or {})
@@ -349,7 +395,7 @@ class VolumeSpikeDetector:
         if prior_ema < self.min_ema.get(tf, 0.0):
             return None
         mult = volume / prior_ema
-        if mult <= self.mult:
+        if mult <= self.mults.get(tf, self.mult):
             return None
         open_dt, _ = _session_bounds(st.bucket)
         if self.skip_opening_candle and st.bucket == open_dt:
@@ -363,7 +409,15 @@ class BreakoutDetector:
     def __init__(self, state_path: Path) -> None:
         self.state_path = state_path
         self._fired: set[str] = set()
+        self._day = self._today()
         self._load()
+
+    def _roll_day(self) -> None:
+        """Forget yesterday's keys if the watcher has run past midnight."""
+        today = self._today()
+        if today != self._day:
+            self._day = today
+            self._fired = set()
 
     @staticmethod
     def _today() -> str:
@@ -378,14 +432,25 @@ class BreakoutDetector:
             logger.warning("Could not read signal state: %s", exc)
             return
         if data.get("date") == self._today():
-            self._fired = set(data.get("fired_52w", []))
+            # "fired_52w" is the pre-daily-volume name for the same list.
+            self._fired = set(data.get("fired", data.get("fired_52w", [])))
 
     def _save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"date": self._today(), "fired_52w": sorted(self._fired)}
+        payload = {"date": self._today(), "fired": sorted(self._fired)}
         self.state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
+    def first_today(self, key: str) -> bool:
+        """True (and remembered, across restarts) the first time *key* is seen today."""
+        self._roll_day()
+        if key in self._fired:
+            return False
+        self._fired.add(key)
+        self._save()
+        return True
+
     def check(self, symbol: str, ltp: float, ctx: SymbolContext) -> list[tuple[str, float]]:
+        self._roll_day()
         hits: list[tuple[str, float]] = []
         if ctx.high_52w and ltp > ctx.high_52w:
             hits.append((HIGH_52W, ctx.high_52w))
@@ -412,6 +477,8 @@ class SignalMonitor:
     timeframes: list[int]
     ema_period: int = 21
     volume_mult: float = 2.0
+    # Per-timeframe multiplier overrides ({5: 2.5, DAILY_TF: 2.0}); volume_mult otherwise
+    volume_mults: dict[int, float] = field(default_factory=dict)
     skip_opening_candle: bool = True
     # Volume spikes only for stocks trading ≥ this ₹ value/day on average (0 = off)
     min_avg_daily_value: float = 0.0
@@ -431,13 +498,17 @@ class SignalMonitor:
     def __post_init__(self) -> None:
         if self.clock is None:
             self.clock = SessionClock(fo_symbols=self.fo_symbols)
+        # Intraday candles go to the candle detector; D is checked per tick.
+        intraday = [t for t in self.timeframes if t != DAILY_TF]
+        self.daily_enabled = self.volume_enabled and DAILY_TF in self.timeframes
         self.volume = VolumeSpikeDetector(
-            timeframes=self.timeframes if self.volume_enabled else [],
+            timeframes=intraday if self.volume_enabled else [],
             ema_period=self.ema_period,
             mult=self.volume_mult,
             skip_opening_candle=self.skip_opening_candle,
             close_for=self.clock.continuous_close,
             min_ema=self.min_ema,
+            mults=self.volume_mults,
         )
         self.breakout = BreakoutDetector(self.state_path)
 
@@ -467,6 +538,39 @@ class SignalMonitor:
             if cap is None or cap < self.min_market_cap_cr:
                 return False
         return True
+
+    def _daily_volume(
+        self, symbol: str, ltp: float, cum_volume: int, now: datetime
+    ) -> Signal | None:
+        """Daily rule: today's volume so far > mult × EMA of prior days' volume.
+
+        Fires once per stock per day, the moment it crosses. Only during the
+        continuous session — the closing-auction print for F&O stocks lands
+        after 15:15 and would tip many names over at once.
+        """
+        if not self.clock.in_continuous(symbol, now):  # type: ignore[union-attr]
+            return None
+        ctx = self.contexts.get(symbol)
+        ema = ctx.daily_volume_ema if ctx else None
+        if not ema or ema <= 0 or ema < self.min_ema.get(DAILY_TF, 0.0):
+            return None
+        mult = cum_volume / ema
+        if mult <= self.volume_mults.get(DAILY_TF, self.volume_mult):
+            return None
+        if not self._volume_eligible(symbol):
+            return None
+        if not self.breakout.first_today(f"{symbol}|{VOLUME_SPIKE}|D"):
+            return None
+        return self._signal(
+            VOLUME_SPIKE,
+            symbol,
+            ltp,
+            now,
+            timeframe_min=DAILY_TF,
+            candle_volume=int(cum_volume),
+            volume_ema=ema,
+            volume_mult=mult,
+        )
 
     def _signal(self, kind: str, symbol: str, ltp: float, now: datetime, **extra: Any) -> Signal:
         return Signal(
@@ -511,6 +615,10 @@ class SignalMonitor:
                         volume_mult=candle.mult,
                     )
                 )
+        if self.daily_enabled and volume is not None:
+            sig = self._daily_volume(symbol, ltp, volume, now)
+            if sig is not None:
+                out.append(sig)
         # Continuous session only: during the CAS the LTP is an auction
         # print, and nothing after it can be traded intraday anyway.
         if self.breakout_enabled and self.clock.in_continuous(symbol, now):  # type: ignore[union-attr]
@@ -525,7 +633,7 @@ class SignalMonitor:
                 sig.symbol,
                 sig.ltp,
                 sig.day_change_pct,
-                f" vol={sig.volume_mult:.2f}x ({sig.timeframe_min}m)"
+                f" vol={sig.volume_mult:.2f}x ({tf_label(sig.timeframe_min)})"
                 if sig.kind == VOLUME_SPIKE
                 else f" level={sig.level:.2f}",
             )
@@ -555,7 +663,13 @@ def format_signal_message(
     low_52w = ctx.low_52w if ctx else None
     prev_day = ctx.prev_day_change_pct if ctx else None
 
-    if sig.kind == VOLUME_SPIKE:
+    if sig.kind == VOLUME_SPIKE and sig.timeframe_min == DAILY_TF:
+        head = (
+            f"📊 *DAILY VOLUME SPIKE* — *{sig.symbol}*\n"
+            f"Volume today so far: `{sig.volume_mult:.2f}x` its daily EMA "
+            f"(`{sig.candle_volume:,}` vs `{sig.volume_ema:,.0f}`)"
+        )
+    elif sig.kind == VOLUME_SPIKE:
         end = (
             sig.candle_start + timedelta(minutes=sig.timeframe_min)
             if sig.candle_start
@@ -705,12 +819,13 @@ class SignalSeeder:
     def seed_symbol(self, inst: Instrument) -> None:
         today = datetime.now(IST).date()
         daily = self._daily(inst, today)
-        ctx = context_from_daily(daily, today=today)
+        ctx = context_from_daily(daily, today=today, ema_period=self.monitor.ema_period)
         if ctx is not None:
             self.monitor.set_context(inst.symbol, ctx)
         if not self.monitor.volume_enabled:
             return
-        for tf in self.monitor.timeframes:
+        # Intraday candles only; D uses the daily bars loaded above.
+        for tf in self.monitor.volume.timeframes:
             if self._stop.is_set():
                 return
             candles = self._intraday(inst, tf)
@@ -822,7 +937,9 @@ def _digest_entry_html(sig: Signal, offers: list[tuple[str, str]], note: str | N
     )
     if sig.kind == VOLUME_SPIKE:
         lines = [
-            f"📊 {sym} <code>{sig.volume_mult:.2f}x</code> vol · {sig.timeframe_min}m · {at}",
+            f"📊 {sym} <code>{sig.volume_mult:.2f}x</code> vol · "
+            + ("today vs daily EMA" if sig.timeframe_min == DAILY_TF else f"{sig.timeframe_min}m")
+            + f" · {at}",
             f"Price <code>{_fmt_px(sig.ltp)}</code> · {day}",
             f"52w high <code>{_fmt_px(ctx.high_52w if ctx else None)}</code>",
             yday,

@@ -6,7 +6,8 @@ Use this checklist whenever you change behaviour users (or future-you) need to k
 
 | Code change | Update these |
 |-------------|--------------|
-| New / renamed env var | `.env.example` + any doc that lists env vars ([ALERTS](ALERTS.md), [ORDERS](ORDERS.md), [SCREENER](SCREENER.md), [LOGIN](LOGIN.md)) |
+| New / renamed env var | `.env.example` + any doc that lists env vars ([ALERTS](ALERTS.md), [ORDERS](ORDERS.md), [SCREENER](SCREENER.md), [LOGIN](LOGIN.md), [SIGNALS](SIGNALS.md)) |
+| Changed **default** of an env var | Same as above, **plus** say in the PR which `.env` line operators must edit: an existing `.env` that spells out the old value keeps it (see [../deploy/CLOUD.md](../deploy/CLOUD.md) Gotchas) |
 | Alert rules (thresholds, F&O, ASM, report shape) | [ALERTS.md](ALERTS.md), short blurb in [../README.md](../README.md) |
 | Login / redirect / token flow | [LOGIN.md](LOGIN.md) — if **unchanged**, say so in the PR description |
 | Trading modes / SL / sizing / caps | [ORDERS.md](ORDERS.md), [TESTING_ORDERS.md](TESTING_ORDERS.md), `.env.example` |

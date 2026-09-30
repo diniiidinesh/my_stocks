@@ -110,6 +110,9 @@ def test_watch_exits_nonzero_when_feed_dies_permanently(
 
     monkeypatch.setattr(cli_module, "_kite_client", lambda *a, **kw: _FakeKite())
     monkeypatch.setattr(cli_module, "build_universe", lambda **kw: fake_instruments)
+    # The feed-dead alert is only sent during market hours; pin that so the
+    # test doesn't fail when run in the evening or at weekends.
+    monkeypatch.setattr(cli_module, "_in_ist_market_hours", lambda *a, **kw: True)
     monkeypatch.setattr(cli_module, "load_nfo_equity_underlyings", lambda kite: set())
     monkeypatch.setattr(cli_module, "load_asm_symbols", lambda **kw: set())
     monkeypatch.setattr(cli_module, "KiteFeed", _DeadOnArrivalFeed)
