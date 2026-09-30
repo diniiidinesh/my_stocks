@@ -41,6 +41,7 @@ from nse_alert.signals import (
     SignalSeeder,
     format_signal_digest,
     format_signal_message,
+    tf_label,
 )
 from nse_alert.surveillance import load_asm_symbols, load_nfo_equity_underlyings
 from nse_alert.trailing import TrailingStopRunner
@@ -133,6 +134,10 @@ def watch_cmd(
         volume_min_ema = settings.volume_spike_min_ema_map
     except ValueError as exc:
         raise click.ClickException(f"VOLUME_SPIKE_MIN_EMA: {exc}") from exc
+    try:
+        volume_mult, volume_mults = settings.volume_spike_mult_map
+    except ValueError as exc:
+        raise click.ClickException(f"VOLUME_SPIKE_MULT: {exc}") from exc
 
     lock_fh = acquire_single_instance(settings.state_dir)
 
@@ -258,7 +263,8 @@ def watch_cmd(
             state_path=settings.state_dir / "signals.json",
             timeframes=volume_timeframes,
             ema_period=settings.volume_spike_ema_period,
-            volume_mult=settings.volume_spike_mult,
+            volume_mult=volume_mult,
+            volume_mults=volume_mults,
             min_avg_daily_value=settings.volume_spike_min_avg_value_cr * 1e7,  # Cr → ₹
             min_ema=volume_min_ema,
             min_market_cap_cr=settings.volume_spike_min_market_cap_cr,
@@ -618,13 +624,16 @@ def _signals_label(
     parts: list[str] = []
     if settings.volume_spike_enabled:
         floors = settings.volume_spike_min_ema_map
+        default_mult, mults = settings.volume_spike_mult_map
         tfs = ",".join(
-            f"{t}m" + (f"≥{floors[t]:,.0f}" if t in floors else "") for t in timeframes
+            f"{tf_label(t)}>{mults.get(t, default_mult):g}x"
+            + (f"(EMA≥{floors[t]:,.0f})" if t in floors else "")
+            for t in timeframes
         )
         digest = settings.signal_digest_volume_minutes
         parts.append(
-            f"vol>{settings.volume_spike_mult:g}xEMA{settings.volume_spike_ema_period}"
-            f"@{tfs} mcap≥₹{settings.volume_spike_min_market_cap_cr:g}Cr "
+            f"vol[{tfs}] EMA{settings.volume_spike_ema_period} "
+            f"mcap≥₹{settings.volume_spike_min_market_cap_cr:g}Cr "
             f"value≥₹{settings.volume_spike_min_avg_value_cr:g}Cr"
             + (f" (digest {digest}m)" if digest > 0 else "")
         )

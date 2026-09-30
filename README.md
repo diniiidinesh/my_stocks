@@ -10,8 +10,8 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | Test trades | BUY on **+13% UP** (MIS) + **2% SL-Limit**, margin-sized ≈ **₹10k** |
 | Cost-to-cost SL | Trail stop to entry after +2% from fill |
 | Upper-circuit exit | Market SELL when LTP hits +20% of prev close |
-| Volume spike | 5m candle volume > 2× its 21-EMA → alert + `/confirm` BUY/SELL |
-| 52-week breakout | LTP above prior 52w high / below 52w low → alert + `/confirm` BUY/SELL |
+| Volume spike | Candle volume > 2.5× its 21-EMA on 5m/15m, and/or daily (`D`: today's volume so far vs daily EMA); EMA, market-cap and value floors → alert + `/confirm` BUY/SELL |
+| 52-week breakout | LTP above prior 52w high / below 52w low → pooled 15-min digest + `/confirm` BUY/SELL |
 | EOD alert report | Close % per scrip + hold-level counts |
 | EOD TA screener | Daily chart → Excel + Telegram (after 15:40 IST) |
 | Cloud | AWS Lightsail Mumbai (Oracle free if capacity allows) |

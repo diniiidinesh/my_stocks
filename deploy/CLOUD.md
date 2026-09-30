@@ -190,7 +190,7 @@ MIS_CUTOFF_NON_CAS_HHMM=1525
 
 # Volume spike + 52w breakout alerts, /confirm orders (docs/SIGNALS.md)
 VOLUME_SPIKE_ENABLED=true
-VOLUME_SPIKE_TIMEFRAMES=5,15
+VOLUME_SPIKE_TIMEFRAMES=5,15        # D = daily (swing); e.g. D or 5,15,D
 VOLUME_SPIKE_EMA_PERIOD=21
 VOLUME_SPIKE_MULT=2.5
 VOLUME_SPIKE_MIN_EMA=5:200000,15:1000000
@@ -341,6 +341,14 @@ confirmation. See [../docs/ORDERS.md](../docs/ORDERS.md) and
   docker compose exec nse-alert git -C /app rev-parse --short HEAD 2>/dev/null \
     || docker inspect -f '{{.Created}}' nse-alert   # image build time
   ```
+- **A new default in the code does not change a value already in your `.env`.**
+  Anything written in `.env` overrides the code default, and the VM's `.env`
+  was copied from an older `.env.example`. So when a release changes a
+  default (e.g. `SCREEN_LOOKBACK_DAYS` 20 → 3), the VM keeps the old value
+  until you edit it. After pulling, compare the two:
+  `diff <(grep -oE '^[A-Z0-9_]+=.*' .env.example | sort) <(grep -oE '^[A-Z0-9_]+=.*' .env | sort)`.
+  The screener's Excel `Config` sheet and the `watch` banner show the values
+  actually in effect.
 - **Changing `.env` does nothing until you recreate.** A running watcher never
   re-reads `.env`, so a `TRADE_MODE` edit needs step 2 again. The banner in step
   3 is how you confirm the change actually took.

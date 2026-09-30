@@ -79,12 +79,15 @@ class Settings(BaseSettings):
 
     # --- Intraday signals (volume spike / 52-week breakout) — docs/SIGNALS.md ---
     volume_spike_enabled: bool = Field(default=True, alias="VOLUME_SPIKE_ENABLED")
-    # Candle minutes, comma-separated (1,3,5,10,15,30,60), e.g. "5" or "5,15"
+    # Timeframes, comma-separated: candle minutes (1,3,5,10,15,30,60) and/or
+    # D (daily: today's running volume vs daily EMA), e.g. "5,15" or "D"
     volume_spike_timeframes: str = Field(default="5,15", alias="VOLUME_SPIKE_TIMEFRAMES")
     volume_spike_ema_period: int = Field(default=21, alias="VOLUME_SPIKE_EMA_PERIOD")
     # Fire when closed-candle volume > this × EMA of prior candles' volume
-    volume_spike_mult: float = Field(default=2.5, alias="VOLUME_SPIKE_MULT")
-    # Floor on the prior candle-volume EMA per timeframe, shares: "5:200000,15:1000000"
+    # "2.5" for every timeframe, or per timeframe: "5:2.5,15:2.5,D:2"
+    # (a bare number is the default for timeframes not listed)
+    volume_spike_mult: str = Field(default="2.5", alias="VOLUME_SPIKE_MULT")
+    # Floor on the prior volume EMA per timeframe, shares: "5:200000,15:1000000,D:1000000"
     volume_spike_min_ema: str = Field(
         default="5:200000,15:1000000", alias="VOLUME_SPIKE_MIN_EMA"
     )
@@ -181,6 +184,14 @@ class Settings(BaseSettings):
         from nse_alert.signals import parse_timeframes
 
         return parse_timeframes(self.volume_spike_timeframes)
+
+    @property
+    def volume_spike_mult_map(self) -> tuple[float, dict[int, float]]:
+        """(default multiplier, per-timeframe overrides)."""
+        from nse_alert.signals import parse_tf_values
+
+        default, per_tf = parse_tf_values(self.volume_spike_mult)
+        return (2.5 if default is None else default), per_tf
 
     @property
     def volume_spike_min_ema_map(self) -> dict[int, float]:

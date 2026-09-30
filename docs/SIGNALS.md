@@ -9,10 +9,10 @@ These run inside `watch`, alongside the ±% threshold alerts ([ALERTS.md](ALERTS
 | Env | Default | Meaning |
 |-----|---------|---------|
 | `VOLUME_SPIKE_ENABLED` | `true` | Turn the rule on or off |
-| `VOLUME_SPIKE_TIMEFRAMES` | `5,15` | Candle minutes, comma-separated. Allowed values: `1,3,5,10,15,30,60`, e.g. `5,15` |
+| `VOLUME_SPIKE_TIMEFRAMES` | `5,15` | Comma-separated candle minutes (`1,3,5,10,15,30,60`) and/or `D` for the [daily rule](#daily-volume-spike-d), e.g. `5,15`, `D` or `5,15,D` |
 | `VOLUME_SPIKE_EMA_PERIOD` | `21` | EMA length, in candles of the same timeframe |
-| `VOLUME_SPIKE_MULT` | `2.5` | Fires when candle volume is **more than** N × EMA |
-| `VOLUME_SPIKE_MIN_EMA` | `5:200000,15:1000000` | Per timeframe, `MINUTES:SHARES`: the EMA itself must be at least this many shares per candle. A timeframe left out has no floor. |
+| `VOLUME_SPIKE_MULT` | `2.5` | Fires when volume is **more than** N × EMA. One number for every timeframe, or per timeframe: `5:2.5,15:2.5,D:2`. A bare number is the default for timeframes not listed, e.g. `2.5,D:2` |
+| `VOLUME_SPIKE_MIN_EMA` | `5:200000,15:1000000` | Per timeframe, `TIMEFRAME:SHARES` (`D:1000000` for daily): the EMA itself must be at least this many shares per candle. A timeframe left out has no floor. |
 | `VOLUME_SPIKE_MIN_MARKET_CAP_CR` | `1000` | Only stocks with market cap ≥ ₹N crore (`0` = off). Volume spikes only, not 52-week alerts. |
 | `VOLUME_SPIKE_SKIP_OPENING_CANDLE` | `true` | Ignore the 09:15 candle |
 | `VOLUME_SPIKE_MIN_AVG_VALUE_CR` | `10` | Only alert for stocks averaging at least ₹N crore traded **per day** (close × volume, last 20 sessions; `0` = off). Stocks whose daily history failed to load are treated as below the floor. |
@@ -62,6 +62,29 @@ Rule of thumb: keep your order to about **1% of what trades in the time you'd ne
 | Swing (CNC) | a session | position ÷ 1% | ~₹0.5 Cr, so **₹10 Cr** (screener's `SCREEN_MIN_TURNOVER_CR`) for spread/circuit quality |
 
 Raise the floor as your position size grows. This is a sizing heuristic, not investment advice.
+
+## Daily volume spike (`D`)
+
+For swing setups. Put `D` in `VOLUME_SPIKE_TIMEFRAMES`, alone or alongside minute candles.
+
+```text
+mult = today's volume so far / EMA21(daily volume, previous sessions)
+fire the first time mult > VOLUME_SPIKE_MULT (or its D: value) — once per stock per day
+```
+
+- **It fires the moment the running total crosses**, not at the close. A stock that has already traded 2.5× a normal day's volume by 11:00 alerts at 11:00; one that builds up slowly may alert at 14:45, or never.
+  - The message shows the multiplier at that moment, so it's always just above the threshold.
+- **Needs no extra data.** The daily EMA comes from the same daily bars used for the 52-week figures, and today's volume from the live feed.
+  - With only `D` configured, no intraday history is downloaded, so startup takes about a minute instead of ~10.
+- **Continuous session only**: 09:15–15:15 for F&O stocks, 09:15–15:30 for the rest.
+  - The F&O closing-auction volume after 15:15 would otherwise tip many stocks over at once.
+  - Pre-open volume counts, since it is part of the day's volume, but nothing fires before 09:15.
+- **Once per stock per day**, remembered in `.nse_alert/signals.json` like the 52-week alerts, so a restart doesn't repeat it.
+- **Filters that still apply:**
+  - Market-cap and traded-value floors, as for minute candles.
+  - An optional `D:` entry in `VOLUME_SPIKE_MIN_EMA` (shares per day).
+  - Stocks with fewer than 21 sessions of history are skipped.
+- **Output** is sent as `📊 DAILY VOLUME SPIKE`, or pooled into the volume digest when `SIGNAL_DIGEST_VOLUME_MINUTES` is set, with the usual BUY/SELL `/confirm` offers.
 
 ## 52-week high / low breakout
 
