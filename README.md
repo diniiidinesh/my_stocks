@@ -76,6 +76,7 @@ nse-alert report [--date YYYY-MM-DD] [--telegram]
 nse-alert screen [--force] [--telegram/--no-telegram] [--max-symbols N]
 nse-alert order buy|sell SYMBOL [--qty N] [--dry-run|--live]
 nse-alert size SYMBOL [--price N]   # explain qty for TRADE_MARGIN_INR (no order)
+nse-alert squareoff [--live]        # cancel open orders + exit positions (dry-run default)
 nse-alert pending
 nse-alert confirm ID
 nse-alert public-ip                 # IPv4/IPv6 egress for Kite whitelist

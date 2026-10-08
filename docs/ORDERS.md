@@ -80,6 +80,47 @@ can't run (e.g. `dry_run` without credentials), or
 `TRADE_EXIT_ON_UPPER_CIRCUIT=false` to disable the whole rule and rely on the
 SL/trail alone.
 
+### EOD square-off
+
+`watch` can flatten the account itself once a day. Set `SQUAREOFF_MODE=dry_run`
+to rehearse (Telegram shows what it *would* do), then `live`.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `SQUAREOFF_MODE` | `off` | `off` / `dry_run` / `live` |
+| `SQUAREOFF_HHMM` | `1505` | IST time the run starts |
+| `SQUAREOFF_LATEST_HHMM` | `1510` | Start after this → alert `MISSED`, don't fire late |
+| `SQUAREOFF_PRODUCTS` | `MIS` | Products cancelled/exited; CNC holdings and GTTs are never touched |
+| `SQUAREOFF_RETRIES` | `2` | Re-check/retry passes before reporting `STILL OPEN` |
+
+Sequence: (1) cancel every open order in those products — resting stop-losses
+first, otherwise a live SL SELL plus the exit SELL would flip you short;
+(2) re-read positions from Kite; (3) MARKET-exit each (SELL longs, BUY back
+shorts); (4) re-check and retry, never stacking a second exit on a symbol with
+an unfinished one; (5) Telegram report, loud (`🚨 STILL OPEN`) if anything is left.
+Kite, not `orders.json`, is the source of truth, so hand-placed MIS positions
+are flattened too.
+
+Why 15:05: after 15:00 the day's exits have mostly run, and it leaves ~7
+minutes of retries before the earliest broker auto square-off (15:12 for F&O
+stocks, which also carries Zerodha's auto square-off charge). It is a
+judgment call, not a measured optimum; move it within 15:00–15:10 as you like.
+
+With `live`, fresh MIS entries (auto, `/confirm`, signal offers) also stop at
+`SQUAREOFF_HHMM`, since an entry after the sweep would sit unmanaged.
+
+Runs once per IST day (state in `.nse_alert/squareoff.json`), so a watcher
+restart in the window neither skips nor repeats it. It needs `watch` alive at
+15:05; the feed-health and heartbeat alerts are the cue if it is not. On-demand:
+
+```bash
+uv run nse-alert squareoff          # dry run
+uv run nse-alert squareoff --live   # real orders
+```
+
+The standalone command does not update a running watcher's in-memory book, so
+for the scheduled run let `watch` do it.
+
 ### Sizing
 
 ```text

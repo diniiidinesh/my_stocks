@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     mis_cutoff_cas_hhmm: int = Field(default=1512, alias="MIS_CUTOFF_CAS_HHMM")
     mis_cutoff_non_cas_hhmm: int = Field(default=1525, alias="MIS_CUTOFF_NON_CAS_HHMM")
 
+    # EOD square-off (docs/ORDERS.md): off | dry_run | live. Cancels open orders,
+    # then market-exits open positions once per day at SQUAREOFF_HHMM (IST).
+    squareoff_mode: str = Field(default="off", alias="SQUAREOFF_MODE")
+    squareoff_hhmm: int = Field(default=1505, alias="SQUAREOFF_HHMM")
+    # Latest start; a watcher that comes up later reports "missed" instead.
+    squareoff_latest_hhmm: int = Field(default=1510, alias="SQUAREOFF_LATEST_HHMM")
+    squareoff_products: str = Field(default="MIS", alias="SQUAREOFF_PRODUCTS")
+    squareoff_retries: int = Field(default=2, alias="SQUAREOFF_RETRIES")
+
     # --- Intraday signals (volume spike / 52-week breakout) — docs/SIGNALS.md ---
     volume_spike_enabled: bool = Field(default=True, alias="VOLUME_SPIKE_ENABLED")
     # Timeframes, comma-separated: candle minutes (1,3,5,10,15,30,60) and/or
@@ -204,14 +213,26 @@ class Settings(BaseSettings):
         sides = [p.strip().upper() for p in self.signal_order_sides.split(",")]
         return [s for s in ("BUY", "SELL") if s in sides]
 
+    @property
+    def resolved_squareoff_mode(self) -> str:
+        mode = self.squareoff_mode.strip().lower()
+        return mode if mode in {"dry_run", "live"} else "off"
+
     def session_clock(
         self, fo_symbols: set[str] | None = None, *, fo_known: bool = True
     ) -> SessionClock:
+        cas = hhmm_to_time(self.mis_cutoff_cas_hhmm)
+        non_cas = hhmm_to_time(self.mis_cutoff_non_cas_hhmm)
+        if self.resolved_squareoff_mode == "live":
+            # An entry after the live square-off would sit unmanaged until the
+            # broker's own (charged) auto square-off, so stop entries at it.
+            at = hhmm_to_time(self.squareoff_hhmm)
+            cas, non_cas = min(cas, at), min(non_cas, at)
         return SessionClock(
             fo_symbols=fo_symbols,
             fo_known=fo_known,
-            mis_cutoff_cas=hhmm_to_time(self.mis_cutoff_cas_hhmm),
-            mis_cutoff_non_cas=hhmm_to_time(self.mis_cutoff_non_cas_hhmm),
+            mis_cutoff_cas=cas,
+            mis_cutoff_non_cas=non_cas,
         )
 
     @property

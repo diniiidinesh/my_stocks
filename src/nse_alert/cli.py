@@ -30,7 +30,8 @@ from nse_alert.report import (
     load_events,
     write_day_report,
 )
-from nse_alert.session import SessionClock
+from nse_alert.session import SessionClock, hhmm_to_time, to_ist
+from nse_alert.squareoff import SquareOffSchedule, parse_products, run_squareoff
 from nse_alert.signals import (
     HIGH_52W,
     LOW_52W,
@@ -459,6 +460,59 @@ def watch_cmd(
             if tg:
                 tg.send_text(msg)
 
+    squareoff_mode = settings.resolved_squareoff_mode
+    squareoff_schedule = (
+        SquareOffSchedule(
+            settings.state_dir / "squareoff.json",
+            at=hhmm_to_time(settings.squareoff_hhmm),
+            latest=hhmm_to_time(settings.squareoff_latest_hhmm),
+        )
+        if use_kite and squareoff_mode != "off"
+        else None
+    )
+
+    def _squareoff_notify(msg: str) -> None:
+        logger.info("%s", msg)
+        if tg:
+            tg.send_text(msg)
+
+    def _maybe_squareoff() -> None:
+        if squareoff_schedule is None:
+            return
+        now = datetime.now(timezone.utc)
+        action = squareoff_schedule.check(now)
+        if action == "idle":
+            return
+        if action == "missed":
+            squareoff_schedule.mark(now, "missed")
+            _squareoff_notify(
+                f"🚨 EOD square-off MISSED (watcher up after {settings.squareoff_latest_hhmm:04d} IST). "
+                "Close positions in Kite or run: nse-alert squareoff --live"
+            )
+            return
+        live = squareoff_mode == "live"
+        try:
+            report = run_squareoff(
+                _kite_client(settings.kite_api_key, settings.kite_access_token),
+                products=parse_products(settings.squareoff_products),
+                live=live,
+                market_protection=settings.trade_market_protection,
+                retries=settings.squareoff_retries,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("EOD square-off failed")
+            squareoff_schedule.mark(now, "failed", str(exc))
+            _squareoff_notify(
+                f"🚨 EOD square-off FAILED: {exc}\nClose positions in Kite now."
+            )
+            return
+        if live:
+            for sym, _pos in book.list_open_positions():
+                if sym not in report.remaining_symbols:
+                    book.close_position(sym, reason="eod_squareoff")
+        squareoff_schedule.mark(now, "done" if report.ok else "incomplete")
+        _squareoff_notify(report.format(to_ist(now).strftime("%H:%M")))
+
     def on_tick(symbol: str, ltp: float, volume: int | None = None) -> None:
         last_ltp[symbol] = ltp
         trail_msg = executor.manage_open_stops(symbol, ltp)
@@ -595,6 +649,7 @@ def watch_cmd(
     try:
         if use_kite:
             while not stop["flag"]:
+                _maybe_squareoff()
                 time.sleep(0.5)
         else:
             assert isinstance(price_feed, MockFeed)
@@ -1220,6 +1275,40 @@ def trail_cmd(symbol: str, qty: int, pct: float | None, poll_sec: float, dry_run
         runner.run()
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+@main.command("squareoff")
+@click.option(
+    "--dry-run/--live",
+    default=True,
+    help="Dry-run by default; pass --live to cancel orders and exit positions on Kite",
+)
+def squareoff_cmd(dry_run: bool) -> None:
+    """Cancel all open orders, then market-exit all open positions (MIS by default).
+
+    Same routine `watch` runs automatically at SQUAREOFF_HHMM when
+    SQUAREOFF_MODE is set. Use this for an on-demand flatten. If `watch` is
+    running, prefer letting it do the scheduled run: this command does not
+    update the watcher's in-memory order book.
+    """
+    settings = Settings()
+    if not settings.kite_api_key or not settings.kite_access_token:
+        raise click.ClickException("Needs KITE_API_KEY and KITE_ACCESS_TOKEN")
+    if settings.kite_force_ipv4:
+        force_ipv4()
+    report = run_squareoff(
+        _kite_client(settings.kite_api_key, settings.kite_access_token),
+        products=parse_products(settings.squareoff_products),
+        live=not dry_run,
+        market_protection=settings.trade_market_protection,
+        retries=settings.squareoff_retries,
+    )
+    text = report.format(to_ist(datetime.now(timezone.utc)).strftime("%H:%M"))
+    click.echo(text)
+    if settings.telegram_configured:
+        TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id).send_text(text)
+    if not report.ok:
+        raise SystemExit(1)
 
 
 @main.command("login")
