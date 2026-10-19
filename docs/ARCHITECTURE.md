@@ -108,3 +108,12 @@ tests/test_envfile.py
 ```
 
 Run: `uv run pytest`.
+
+## Browser paper desk
+
+`nse-alert paper` starts `paper_server.py`, serving `paper_web/` and a separate
+`PaperBook` (`paper.py`) backed by `paper-live/ledger.sqlite3` or
+`paper-mock/ledger.sqlite3`. It reuses the read-only universe/feed and daily token
+configuration, never the order executor or Telegram listener. An optional Compose
+`paper` profile is the production supervisor; it exposes only VM loopback port
+8787 for SSH-tunnel access. See [PAPER.md](PAPER.md).

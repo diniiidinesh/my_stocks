@@ -33,3 +33,24 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+
+  paper:
+    profiles: [paper]
+    build: .
+    command: [nse-alert, paper, --feed, kite, --host, 0.0.0.0, --port, '8787']
+    restart: on-failure:3
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file: [.env]
+    environment:
+      STATE_DIR: /data/.nse_alert
+    ports:
+      - '127.0.0.1:8787:8787'
+    volumes:
+      - ./.nse_alert:/data/.nse_alert
+      - ./universes:/app/universes:ro
+      - ./.env:/app/.env:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

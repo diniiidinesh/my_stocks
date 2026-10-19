@@ -1554,5 +1554,10 @@ One-time setup:
     )
 
 
+
+# Separate paper-only entrypoint; does not start watch or its order executor.
+from nse_alert.paper_server import paper_cmd
+main.add_command(paper_cmd)
+
 if __name__ == "__main__":
     main()
