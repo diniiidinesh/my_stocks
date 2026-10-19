@@ -238,6 +238,10 @@ def watch_cmd(
     if settings.telegram_configured:
         tg = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
 
+    paper_offers = None
+    if settings.paper_trading:
+        from nse_alert.paper_offers import PaperOffers
+        paper_offers = PaperOffers(settings.state_dir, live=use_kite)
     alert_count = {"n": 0}
     clock = settings.session_clock(fo_symbols, fo_known=fo_known)
 
@@ -246,6 +250,10 @@ def watch_cmd(
         if not use_kite:
             return None  # synthetic mock prices: demo trades at any hour
         now = datetime.now(timezone.utc)
+        if settings.paper_trading:
+            local = to_ist(now)
+            if local.weekday() >= 5 or not (hhmm_to_time(915) <= local.time() < hhmm_to_time(settings.squareoff_hhmm)):
+                return f"outside paper entry session ending {settings.squareoff_hhmm:04d} IST"
         if clock.entries_open(symbol, now, product=executor.product):
             return None
         kind = "F&O/CAS" if clock.is_cas(symbol) else "non-F&O"
@@ -292,11 +300,11 @@ def watch_cmd(
     signal_offers_on = bool(
         signal_monitor is not None
         and settings.signal_orders_enabled
-        and executor.enabled()
+        and (executor.enabled() or settings.paper_trading)
         and signal_sides
     )
     # Any pending order (threshold confirm or signal offer) needs the listener.
-    listener_wanted = executor.mode == "confirm" or signal_offers_on
+    listener_wanted = not settings.paper_trading and (executor.mode == "confirm" or signal_offers_on)
     last_ltp: dict[str, float] = {}
 
     # Signal kind → shared digest (kinds with the same window share one).
@@ -313,6 +321,15 @@ def watch_cmd(
 
     def _signal_offers(sig: Signal) -> tuple[list[tuple[str, str]], str | None]:
         offers: list[tuple[str, str]] = []
+        if paper_offers is not None:
+            cutoff = _entry_cutoff_note(sig.symbol)
+            if signal_offers_on and not cutoff and "BUY" in signal_sides:
+                offer = paper_offers.add(symbol=sig.symbol, ltp=sig.ltp, reason=sig.kind,
+                    source=f"signal:{sig.kind}:{sig.symbol}:{sig.fired_at.isoformat()}",
+                    settings=settings, now=datetime.now(timezone.utc))
+                offers.append(("PAPER BUY", offer['id']))
+            return offers, ("PAPER mode: long-only simulated order; " + (cutoff or
+                f"SL {settings.paper_stop_loss_pct:g}%, target {settings.paper_target_pct:g}%; sized at confirmation"))
         cutoff_note = _entry_cutoff_note(sig.symbol) if signal_offers_on else None
         if signal_offers_on and cutoff_note is None:
             for side in signal_sides:
@@ -373,6 +390,21 @@ def watch_cmd(
         from nse_alert.engine import Alert as AlertType
 
         assert isinstance(alert, AlertType)
+        if paper_offers is not None:
+            if alert.direction != "UP" or alert.threshold_pct not in settings.trade_threshold_list:
+                return
+            cutoff = _entry_cutoff_note(alert.symbol)
+            if cutoff:
+                return
+            from nse_alert.paper_offers import offer_text
+            offer = paper_offers.add(symbol=alert.symbol, ltp=alert.ltp,
+                reason=f"+{alert.threshold_pct:g}% alert", source=f"threshold:{alert.symbol}:{alert.threshold_pct}:{alert.fired_at.isoformat()}",
+                settings=settings, now=datetime.now(timezone.utc))
+            if tg:
+                tg.send_text(offer_text(offer))
+            else:
+                click.echo(offer_text(offer))
+            return
         if not executor.should_trade_alert(
             direction=alert.direction, threshold_pct=alert.threshold_pct
         ):
@@ -640,6 +672,7 @@ def watch_cmd(
             on_confirm=_on_confirm,
             on_cancel=_on_cancel,
             on_health_alert=tg.send_text if tg else None,
+            state_dir=settings.state_dir,
         )
         confirm_listener.start()
 
@@ -1232,6 +1265,8 @@ def trail_cmd(symbol: str, qty: int, pct: float | None, poll_sec: float, dry_run
     configured). One process manages one symbol.
     """
     settings = Settings()
+    if settings.paper_trading:
+        raise click.ClickException("TRADE_MODE=paper blocks broker trailing stops; use /paper levels")
     trail_pct = pct if pct is not None else settings.trade_stop_loss_pct
     mode = "dry_run" if dry_run else "live"
     if mode == "live" and (not settings.kite_api_key or not settings.kite_access_token):
@@ -1292,6 +1327,8 @@ def squareoff_cmd(dry_run: bool) -> None:
     update the watcher's in-memory order book.
     """
     settings = Settings()
+    if settings.paper_trading:
+        raise click.ClickException("TRADE_MODE=paper blocks broker square-off; use /paper squareoff")
     if not settings.kite_api_key or not settings.kite_access_token:
         raise click.ClickException("Needs KITE_API_KEY and KITE_ACCESS_TOKEN")
     if settings.kite_force_ipv4:

@@ -44,3 +44,10 @@ def release_single_instance(fh: IO[str]) -> None:
         fcntl.flock(fh, fcntl.LOCK_UN)
     finally:
         fh.close()
+
+
+def acquire_telegram_poller(state_dir: Path, token: str):
+    """One getUpdates consumer per bot, shared by watch and the paper desk."""
+    import hashlib
+    fingerprint = hashlib.sha256(token.split(":", 1)[0].encode()).hexdigest()[:20]
+    return acquire_single_instance(state_dir, name=f"telegram-{fingerprint}.lock")

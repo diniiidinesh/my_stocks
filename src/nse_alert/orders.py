@@ -54,7 +54,7 @@ def parse_order_margins_payload(detail: Any) -> dict[str, Any]:
         raise RuntimeError(str(row.get("message") or row))
     return row
 
-TradeMode = Literal["off", "dry_run", "confirm", "auto"]
+TradeMode = Literal["off", "dry_run", "confirm", "auto", "paper"]
 TransactionSide = Literal["BUY", "SELL"]
 
 
@@ -720,7 +720,7 @@ class OrderExecutor:
 
     def manage_open_stops(self, symbol: str, ltp: float) -> str | None:
         """Trail stop to entry (cost-to-cost) when LTP rises enough after entry."""
-        if not self.book or not self.trail_breakeven:
+        if self.mode == "paper" or not self.book or not self.trail_breakeven:
             return None
         pos = self.book.get_position(symbol)
         if not pos or pos.get("breakeven_armed") or pos.get("side") == "SELL":
@@ -806,7 +806,7 @@ class OrderExecutor:
         below entry will not fill; this fires a market SELL as the band is
         crossed instead, while there is still buying interest to exit into.
         """
-        if not self.book or not self.exit_on_upper_circuit:
+        if self.mode == "paper" or not self.book or not self.exit_on_upper_circuit:
             return None
         pos = self.book.get_position(symbol)
         if not pos or pos.get("side") == "SELL":
@@ -899,6 +899,8 @@ class OrderExecutor:
         )
 
     def _kite(self) -> Any:
+        if self.mode == "paper":
+            raise RuntimeError("Broker order access is disabled in TRADE_MODE=paper")
         from kiteconnect import KiteConnect
 
         if not self.api_key or not self.access_token:
@@ -916,6 +918,9 @@ class OrderExecutor:
     ) -> OrderResult:
         mode = force_mode or self.mode
         now = datetime.now(timezone.utc)
+        if self.mode == "paper":
+            return OrderResult(False, "paper", request, None,
+                               "PAPER mode: use Telegram /paper or the Paperkite browser desk", now)
         if mode == "off":
             return OrderResult(False, mode, request, None, "TRADE_MODE=off", now)
 

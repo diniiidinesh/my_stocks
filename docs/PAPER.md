@@ -177,3 +177,19 @@ Only 12 stock/timeframe history caches are retained, with 60-second refresh and
 request spacing, to limit VM memory and API load.
 
 Indicator calculation tests: `node tests/browser/test_indicators.cjs`.
+
+## Confirm Telegram alerts into this ledger
+
+Choose `TRADE_MODE=paper` in the shared VM `.env` and recreate both the alert
+watcher and Paperkite after deploying the updated code. The watcher generates
+P-prefixed **PAPER** offers; the Paperkite service receives their `/confirm` and
+`/cancel` commands and writes into this same live-price paper ledger. Browser and
+Telegram orders share costs, cash, quote freshness, protections and the profit
+streak. There is no additional market-data connection for Telegram, only a
+long-polling thread.
+
+The configured Telegram group access policy is retained. Optional numeric sender
+restrictions are available. The browser connection line shows Telegram status.
+Full command, access, sizing and replay rules: [Paper confirmations](ORDERS.md#paper-confirmations-trade_modepaper).
+Live and mock offer stores are separate (`paper-offers-live.sqlite3` and
+`paper-offers-mock.sqlite3`) and never use real `orders.json` confirmations.

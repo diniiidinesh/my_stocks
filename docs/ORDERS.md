@@ -306,3 +306,58 @@ Alert-driven auto/confirm orders use margin sizing unless `TRADE_SIZING=fixed`. 
 - [TESTING_ORDERS.md](TESTING_ORDERS.md) — automated + live test cases  
 - [../deploy/CLOUD.md](../deploy/CLOUD.md) — static IP + whitelist  
 - Code: `orders.py`, `confirm_bot.py`
+
+## Paper confirmations (`TRADE_MODE=paper`)
+
+Set `TRADE_MODE=paper` to retain the alert → `/confirm` experience while executing
+only against Paperkite's simulated cash ledger. This is a separate mode from
+`dry_run` (which logs hypothetical broker orders) and `confirm` (real broker
+orders after confirmation).
+
+The watcher sends alerts and creates paper offers in a separate SQLite store.
+Offers use **P-prefixed IDs**, e.g. `/confirm P012345ABCD`; `/cancel P012345ABCD`
+cancels that offer. Old real-order IDs cannot be used. Positive threshold alerts
+use `TRADE_ON_THRESHOLDS`; volume and 52-week alerts offer **PAPER BUY** only if
+signal offers are enabled. Short selling is not supported by this cash-paper desk.
+The watcher never starts its real-order confirmation listener in paper mode.
+The Paperkite service is the single Telegram input consumer and must be running.
+
+At confirmation, Paperkite checks the offer TTL, current session, 15-second quote
+freshness, capital and daily loss cap. With `TRADE_SIZING=fixed`, it uses
+`TRADE_QTY`; otherwise `TRADE_MARGIN_INR` is a **cash notional budget**, with no
+leverage. Quantity is calculated at the then-current simulated fill price. Stops
+and targets are relative to that fill: `PAPER_STOP_LOSS_PCT=3` and
+`PAPER_TARGET_PCT=6` by default. These settings are independent of the real-trade
+stop settings. The total cash debit also includes estimated charges. Results appear
+in the browser's existing positions, trade journal and daily P&L.
+
+`/paper pending`, `/paper positions`, `/paper pnl`, `/paper exit ORDER_ID`, and
+`/paper help` are optional management commands; typing a new entry is not needed.
+Telegram replies are labelled PAPER. A queued limit/stop paper order is distinct
+from an unconfirmed alert offer. Cancelling an alert after it has filled does not
+exit the position; use the browser or `/paper exit`.
+
+Access defaults to human members of the configured `TELEGRAM_CHAT_ID` group(s).
+Private configured chats accept only their owner. Set the optional
+`PAPER_TELEGRAM_ALLOWED_USER_IDS` to restrict confirmations to named numeric user
+IDs. Edited, forwarded, anonymous and bot messages are ignored. Commands delayed
+by more than 120 seconds are rejected; a still-valid offer can be confirmed with a
+new message. Offer lifetime is `TRADE_CONFIRM_TTL_MINUTES`, not 120 seconds.
+
+A message receipt and any account mutation commit in the same SQLite transaction.
+A separate unique offer reference prevents repeated confirmations—even from
+separate messages or group members—from creating a second paper order. Telegram
+may repeat an acknowledgement after a network timeout, with the same order ID.
+A failed/late command is not silently queued for tomorrow.
+
+Paper mode disables the watcher's real-entry, stop-trailing, upper-circuit-exit
+and scheduled broker-square-off paths. Explicit broker CLI order placement,
+trailing and square-off are blocked as well. Paperkite still performs its own
+scheduled paper square-off. Existing real positions are not managed or migrated
+by paper mode; keep their management in Kite.
+
+Both consumers share a per-bot process lock under `STATE_DIR`, preventing an
+accidental mixed deployment from starting a second `getUpdates` loop. The paper
+consumer refuses an existing webhook rather than deleting it. After switching
+mode, rebuild/recreate **both** services so an old watcher cannot retain its old
+real-order mode. Login and daily token acquisition are unchanged.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import math
 import sqlite3
 import threading
@@ -47,10 +48,14 @@ def number(value: object, *, minimum: float = 0) -> float:
 class PaperBook:
     def __init__(self, path: Path, instruments: list, *, live: bool = False,
                  now: Callable[[], datetime] | None = None, cutoff: time = time(15, 5)):
+        self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         path.chmod(0o600)
         self.db.execute('CREATE TABLE IF NOT EXISTS account (id INTEGER PRIMARY KEY, body TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS telegram_receipts (key TEXT PRIMARY KEY, response TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS telegram_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        self._atomic_telegram = False
         self.lock = threading.RLock()
         self.now = now or (lambda: datetime.now(IST))
         self.live, self.cutoff = live, cutoff
@@ -66,6 +71,7 @@ class PaperBook:
         self.alerts: list[dict] = []
         self.seen: set[tuple] = set()
         self.feed_error = ''
+        self.telegram_status = 'disabled'
         self._last_body = ''
         self._save()
 
@@ -73,10 +79,46 @@ class PaperBook:
         body = json.dumps(self.data, allow_nan=False)
         if body == self._last_body:
             return
-        with self.db:
-            self.db.execute('INSERT OR REPLACE INTO account VALUES (1, ?)',
-                            (body,))
+        if self._atomic_telegram:
+            self.db.execute('INSERT OR REPLACE INTO account VALUES (1, ?)', (body,))
+        else:
+            with self.db:
+                self.db.execute('INSERT OR REPLACE INTO account VALUES (1, ?)', (body,))
         self._last_body = body
+
+    def telegram_once(self, key, action):
+        """Persist the paper action and its Telegram receipt in ONE transaction."""
+        with self.lock:
+            prior = self.db.execute('SELECT response FROM telegram_receipts WHERE key=?', (key,)).fetchone()
+            if prior:
+                return prior[0]
+            before, last = copy.deepcopy(self.data), self._last_body
+            self.db.execute('BEGIN IMMEDIATE')
+            self._atomic_telegram = True
+            try:
+                try:
+                    response = action()
+                except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                    response = 'PAPER rejected: ' + str(exc)
+                self._save()
+                self.db.execute('INSERT INTO telegram_receipts VALUES (?, ?)', (key, response))
+                self.db.commit()
+                return response
+            except BaseException:
+                self.db.rollback()
+                self.data, self._last_body = before, last
+                raise
+            finally:
+                self._atomic_telegram = False
+
+    def telegram_meta(self, key, value=None):
+        with self.lock:
+            if value is not None:
+                with self.db:
+                    self.db.execute('INSERT OR REPLACE INTO telegram_meta VALUES (?, ?)', (key, str(value)))
+                return str(value)
+            row = self.db.execute('SELECT value FROM telegram_meta WHERE key=?', (key,)).fetchone()
+            return row[0] if row else None
 
     def day(self) -> str:
         return self.now().astimezone(IST).date().isoformat()
@@ -128,6 +170,11 @@ class PaperBook:
 
     def place(self, request: dict):
         with self.lock:
+            offer_id = request.get('paper_offer_id')
+            if offer_id:
+                existing = next((o for o in self.data['orders'] if o.get('paper_offer_id') == offer_id), None)
+                if existing:
+                    return existing.copy()
             self._entry_allowed()
             symbol = request.get('symbol')
             if symbol not in self.market or not self._fresh(symbol):
@@ -145,7 +192,8 @@ class PaperBook:
                 raise ValueError('Stop must be below entry and target above entry')
             o = dict(id=uuid.uuid4().hex, symbol=symbol, qty=int(qty), type=kind,
                      entry=entry, stop=stop, target=target, status='pending', day=self.day(),
-                     created=self.now().isoformat(), note=str(request.get('note', ''))[:1000])
+                     created=self.now().isoformat(), note=str(request.get('note', ''))[:1000],
+                     paper_offer_id=offer_id)
             self.data['orders'].append(o)
             self._process(o)
             self._save()
@@ -322,7 +370,7 @@ class PaperBook:
                 ledger.append(dict(date=key, net=net, streak=streak, **day))
             market = [{k: v for k, v in q.items() if k != 'token' and (full or k != 'candles')}
                       | {'fresh': self._fresh(q['symbol'])} for q in self.market.values()]
-            result = dict(entries_open=entries_open, charge_model='NSE cash intraday · Zerodha schedule checked 2026-10-19 · per-order paise estimates', mode='live' if self.live else 'mock', cash=self.data['cash'], capital=self.data['capital'],
+            result = dict(telegram_status=self.telegram_status, entries_open=entries_open, charge_model='NSE cash intraday · Zerodha schedule checked 2026-10-19 · per-order paise estimates', mode='live' if self.live else 'mock', cash=self.data['cash'], capital=self.data['capital'],
                           loss_cap=self.data['loss_cap'], slippage_bps=self.data['slippage_bps'],
                           net=self._net(), paid=self._day()['paid'], charge_breakdown=self._day()['charges'],
                           orders=self.data['orders'], sessions=ledger, streak=streak,

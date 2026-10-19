@@ -484,3 +484,9 @@ security-group port. The existing alert watcher and login workflow remain
 unchanged. See [the complete paper setup](../docs/PAPER.md). Docker Compose is
 still the only production supervisor; do not add a second systemd or bare-host
 paper process against the same ledger.
+
+When switching `TRADE_MODE` between real confirmations and paper confirmations,
+rebuild/recreate both services from the updated source. Do not leave an old
+watcher running with its old mode. Paper Telegram commands are consumed only by
+the paper service; stopping the original watcher after close does not stop the
+paper ledger or its Telegram status commands. See [paper confirmations](../docs/ORDERS.md#paper-confirmations-trade_modepaper).
