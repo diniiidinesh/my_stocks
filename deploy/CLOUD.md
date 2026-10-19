@@ -475,3 +475,12 @@ on stale config indefinitely. Confirm the change took effect by checking the
 ```bash
 docker compose logs nse-alert | grep -m1 "Watching"
 ```
+
+## Optional Paperkite browser service
+
+Use the Compose `paper` profile for the separate paper-only desk. It binds VM
+loopback port 8787 and is accessed through SSH forwarding, with no new public
+security-group port. The existing alert watcher and login workflow remain
+unchanged. See [the complete paper setup](../docs/PAPER.md). Docker Compose is
+still the only production supervisor; do not add a second systemd or bare-host
+paper process against the same ledger.

@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Paperkite · Practice with purpose</title
+  ><style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #0c1117;
+      color: #dbe3ec;
+      font: 14px system-ui;
+    }
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+    button {
+      cursor: pointer;
+      background: #1a2634;
+      color: #dbe3ec;
+      border: 1px solid #2a394a;
+      border-radius: 6px;
+      padding: 9px 13px;
+    }
+    button:hover {
+      border-color: #6ac8b1;
+    }
+    header {
+      height: 68px;
+      border-bottom: 1px solid #25303c;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 25px;
+    }
+    h1 {
+      font-size: 22px;
+      letter-spacing: -1px;
+      margin: 0;
+    }
+    h1 span,
+    .green {
+      color: #55d2b0;
+    }
+    .muted {
+      color: #8291a3;
+    }
+    .pill {
+      font-size: 11px;
+      letter-spacing: 1px;
+      background: #24372f;
+      color: #83d8b1;
+      padding: 6px 10px;
+      border-radius: 20px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      min-height: calc(100vh - 68px);
+    }
+    aside {
+      height: calc(100vh - 68px);
+      overflow: auto;
+      position: sticky;
+      top: 0;
+      border-right: 1px solid #25303c;
+      padding: 20px 12px;
+    }
+    main {
+      padding: 24px;
+      min-width: 0;
+    }
+    h2 {
+      font-size: 15px;
+      margin: 0 0 18px;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: #94a4b6;
+      margin-bottom: 5px;
+    }
+    input,
+    select {
+      background: #0e1620;
+      color: #dbe3ec;
+      border: 1px solid #2b3948;
+      padding: 9px;
+      border-radius: 5px;
+      width: 100%;
+    }
+    .stock {
+      padding: 17px 12px;
+      border-bottom: 1px solid #202c39;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+    }
+    .stock.active {
+      background: #182733;
+      border-left: 2px solid #55d2b0;
+    }
+    .stock small {
+      display: block;
+      color: #8291a3;
+      margin-top: 5px;
+    }
+    .red {
+      color: #ef8390;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin: 20px 0;
+    }
+    .card,
+    .panel {
+      background: #111b26;
+      border: 1px solid #263341;
+      border-radius: 9px;
+      padding: 18px;
+    }
+    .value {
+      font-size: 25px;
+      font-variant-numeric: tabular-nums;
+      margin-top: 9px;
+    }
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(300px, 1fr) 280px;
+      gap: 16px;
+    }
+    .charthead {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .toolbar {
+      display: flex;
+      gap: 7px;
+      margin: 15px 0;
+      flex-wrap: wrap;
+    }
+    canvas {
+      width: 100%;
+      height: 340px;
+      touch-action: none;
+      cursor: crosshair;
+    }
+    .fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin: 15px 0;
+    }
+    .buy {
+      background: #36b897;
+      color: #061b16;
+      width: 100%;
+      font-weight: 700;
+      border: 0;
+    }
+    .section {
+      margin-top: 20px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    td,
+    th {
+      padding: 12px 8px;
+      border-bottom: 1px solid #273340;
+      text-align: left;
+    }
+    th {
+      color: #8291a3;
+      font-weight: 500;
+    }
+    .scroll {
+      overflow: auto;
+    }
+    .streak {
+      display: flex;
+      gap: 6px;
+      margin: 14px 0;
+    }
+    .dot {
+      height: 8px;
+      flex: 1;
+      background: #283744;
+      border-radius: 4px;
+    }
+    .dot.on {
+      background: #55d2b0;
+    }
+    details {
+      margin-top: 18px;
+    }
+    summary {
+      cursor: pointer;
+      color: #8da1b7;
+    }
+    dialog {
+      background: #111b26;
+      color: #dbe3ec;
+      border: 1px solid #3a4c60;
+      border-radius: 12px;
+      width: min(520px, 95vw);
+      padding: 25px;
+    }
+    dialog::backdrop {
+      background: #0009;
+    }
+    .notice {
+      font-size: 12px;
+      line-height: 1.6;
+      color: #8da1b7;
+    }
+    #toast {
+      color: #e2b77a;
+      min-height: 20px;
+      margin: 12px 0;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .empty {
+      text-align: center;
+      color: #8291a3;
+      padding: 25px;
+    }
+    a {
+      color: #6ed4bd;
+    }
+    @media (max-width: 1050px) {
+      .layout {
+        grid-template-columns: 180px 1fr;
+      }
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+      .cards {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+    @media (max-width: 650px) {
+      .layout {
+        display: block;
+      }
+      aside {
+        display: flex;
+        overflow: auto;
+        padding: 5px;
+        height: auto;
+        position: static;
+      }
+      .stock {
+        min-width: 140px;
+      }
+      aside h2,
+      aside .notice {
+        display: none;
+      }
+      main {
+        padding: 12px;
+      }
+      header {
+        padding: 12px;
+      }
+      .value {
+        font-size: 20px;
+      }
+    }
+  </style>
+  <header>
+    <h1>
+      paper<span>kite</span>
+      <small
+        class="muted"
+        style="font-size: 11px; letter-spacing: 1px; margin-left: 15px"
+        >THE PRACTICE DESK</small
+      >
+    </h1>
+    <div>
+      <span class="pill" id="feedBadge">PAPER ONLY · CONNECTING</span>
+      <button onclick="settings.showModal()">Settings</button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside>
+      <h2 class="muted">YOUR WATCHLIST</h2>
+      <input
+        id="search"
+        aria-label="Search stocks"
+        placeholder="Search stocks…"
+      />
+      <div id="watch"></div>
+      <p class="notice">
+        Daily % = move from previous close. Kite credentials stay on this
+        server. Quotes older than 15 seconds cannot fill trades.
+      </p>
+    </aside>
+    <main>
+      <div class="top">
+        <div>
+          <h2 style="font-size: 22px; margin-bottom: 5px">Build your edge.</h2>
+          <span class="muted"
+            >Intraday cash equities · Practice, measure, repeat.</span
+          >
+        </div>
+        <span id="connection" class="notice">Connecting to paper service…</span>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <label>Available paper cash</label>
+          <div id="cash" class="value"></div>
+        </div>
+        <div class="card">
+          <label>Session net P&L</label>
+          <div id="pnl" class="value"></div>
+        </div>
+        <div class="card">
+          <label>Estimated charges paid</label>
+          <div id="cost" class="value"></div>
+        </div>
+        <div class="card">
+          <label>Profitable trading days</label>
+          <div class="value">
+            <span id="streak">0</span><span class="muted"> / 7</span>
+          </div>
+          <div class="streak" id="dots"></div>
+        </div>
+      </div>
+      <div class="workspace">
+        <div class="panel">
+          <div class="charthead">
+            <div>
+              <h2 id="symbol" style="margin: 0"></h2>
+              <span id="quote" class="muted"></span>
+            </div>
+            <select id="tf" style="width: 110px">
+              <option>1 minute</option>
+              <option>5 minutes</option>
+              <option>15 minutes</option>
+            </select>
+          </div>
+          <div class="toolbar">
+            <button onclick="mode='entry'">＋ Entry</button
+            ><button onclick="mode='stop'">＋ Stop</button
+            ><button onclick="mode='target'">＋ Target</button
+            ><span class="notice"
+              >Click chart to place · drag lines to adjust</span
+            >
+          </div>
+          <canvas id="chart"></canvas>
+          <div class="notice">
+            Chart lines plan your next order. Use “Edit levels” on an open
+            position to adjust its protection. Stops fill at the next observed
+            quote, including gaps. Liquidity and partial fills are not modelled.
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Plan your trade <span class="pill">LONG</span></h2>
+          <label>Order type</label
+          ><select id="type">
+            <option value="market">Market</option>
+            <option value="limit">Limit buy</option>
+            <option value="stop">Stop buy</option>
+          </select>
+          <div class="fields">
+            <div>
+              <label for="entry">Entry ₹</label
+              ><input id="entry" type="number" step="0.05" />
+            </div>
+            <div>
+              <label for="qty">Quantity</label
+              ><input id="qty" type="number" value="10" min="1" step="1" />
+            </div>
+            <div>
+              <label for="stop">Stop ₹</label
+              ><input id="stop" type="number" step="0.05" />
+            </div>
+            <div>
+              <label for="target">Target ₹</label
+              ><input id="target" type="number" step="0.05" />
+            </div>
+          </div>
+          <button onclick="defaultStop()">Set 3% stop</button>
+          <p id="risk" class="notice"></p>
+          <button class="buy" id="place">Place paper order</button
+          ><button
+            id="cancelEdit"
+            hidden
+            onclick="cancelEdit()"
+            style="margin-top: 10px"
+          >
+            Cancel level edit
+          </button>
+          <div id="toast" role="status"></div>
+          <div class="notice">
+            No real orders. Full cash funding; no leverage.
+          </div>
+        </div>
+      </div>
+      <div class="panel section">
+        <div class="top">
+          <h2>Positions & orders</h2>
+          <button onclick="endSession()">Square off paper positions</button>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Instrument</th>
+                <th>Status</th>
+                <th>Qty</th>
+                <th>Entry / trigger</th>
+                <th>Stop / target</th>
+                <th>Gross P&L</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="positions"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel section">
+        <div class="top">
+          <h2>Session ledger</h2>
+          <button onclick="exportData()">Export journal</button>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Trades closed</th>
+                <th>Gross P&L</th>
+                <th>Charges</th>
+                <th>Net P&L</th>
+                <th>Streak</th>
+              </tr>
+            </thead>
+            <tbody id="ledger"></tbody>
+          </table>
+        </div>
+        <details>
+          <summary>Charges model & practice rules</summary>
+          <p class="notice">
+            Illustrative NSE intraday model: brokerage min(₹20, 0.03% of
+            turnover) per filled order; STT 0.025% on sells; exchange 0.00307%;
+            SEBI 0.0001%; IPFT ₹0.01/crore; GST 18% of brokerage + exchange +
+            SEBI + IPFT; stamp 0.003% on buys. Estimates use per-order rounding
+            and exclude special fees and income tax. Verify rates before relying
+            on results. Slippage is configurable. Session net P&L includes
+            marked-to-market open P&L, estimated exit charges, and paid charges.
+            Completed days use realized results. No-trade days pause the streak;
+            zero or negative traded days reset it. Live-price days finalize
+            after the configured square-off time. Overdue positions disqualify
+            the affected days. Mock practice is labelled separately. Seven
+            winning sessions alone do not establish a profitable strategy.
+          </p>
+          <a href="https://zerodha.com/charges/" target="_blank" rel="noopener"
+            >Zerodha charges reference</a
+          >
+        </details>
+      </div>
+      <div class="panel section">
+        <h2>Trade journal</h2>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Stock</th>
+                <th>Status / reason</th>
+                <th>Entry → exit</th>
+                <th>Qty</th>
+                <th>Net P&L</th>
+              </tr>
+            </thead>
+            <tbody id="history"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel section">
+        <h2>Threshold alerts</h2>
+        <div id="chargeDetails" class="notice"></div>
+        <div id="alerts" class="notice">
+          Watching ±7%, ±11%, ±13% from the previous close.
+        </div>
+      </div>
+    </main>
+  </div>
+  <dialog id="settings">
+    <h2>Practice settings</h2>
+    <label>Starting paper capital ₹</label
+    ><input id="capital" type="number" value="200000" readonly />
+    <div class="fields">
+      <div>
+        <label>Daily loss cap ₹ · 0 = off</label
+        ><input id="lossCap" type="number" min="0" value="0" />
+      </div>
+      <div>
+        <label>Slippage per fill · basis points</label
+        ><input id="slippage" type="number" min="0" value="5" />
+      </div>
+    </div>
+    <p class="notice">
+      Ledger and drawings are saved on the VM. Starting capital is ₹2 lakh; mock
+      and live-price practice have separate ledgers. Changing slippage affects
+      future fills.
+    </p>
+    <button onclick="saveSettings()">Save settings</button>
+    <button onclick="settings.close()">Close</button>
+  </dialog>
+  <script src="app.js"></script>
+</html>

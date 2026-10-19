@@ -43,3 +43,8 @@ How to **find**, **read**, and **update** docs in this repository.
 5. **No secrets** — never paste API keys, tokens, or live IPs into docs.
 
 Full checklist: [UPKEEP.md](UPKEEP.md).
+
+## Paper trading
+
+[Paperkite browser desk](PAPER.md) — paper-only accounting, chart levels, costs,
+seven-day streak, and private access through the VM SSH tunnel.

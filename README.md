@@ -22,6 +22,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 |-----|----------------|
 | **[docs/README.md](docs/README.md)** | Full index — start here to navigate the repo |
 | **[docs/ALERTS.md](docs/ALERTS.md)** | Thresholds, F&O filter, ASM tags, EOD reports |
+| **[docs/PAPER.md](docs/PAPER.md)** | Browser paper trading, costs and VM access |
 | **[docs/LOGIN.md](docs/LOGIN.md)** | Daily Kite token (`login` / `set-token`) |
 | **[docs/SIGNALS.md](docs/SIGNALS.md)** | Volume-spike + 52-week breakout alerts, ordering via `/confirm` |
 | **[docs/ORDERS.md](docs/ORDERS.md)** | Dry-run / confirm / auto, sizing, SL trail |
@@ -65,9 +66,17 @@ uv run nse-alert screen --force --max-symbols 20 --no-telegram
 
 Details: [docs/LOGIN.md](docs/LOGIN.md) · alerts: [docs/ALERTS.md](docs/ALERTS.md) · orders: [docs/ORDERS.md](docs/ORDERS.md)
 
+## Paper trading
+
+A separate browser desk uses live Kite prices with a persistent simulated ledger,
+chart-drawn entry/stop/target levels, estimated charges and a seven-day net-profit
+streak. It never calls broker order APIs. See [Paperkite setup](docs/PAPER.md) for
+Docker and SSH-tunnel access. The hosted design preview remains a mock demo.
+
 ## CLI
 
 ```text
+nse-alert paper [--feed mock|kite] [--port 8787]  # browser paper desk
 nse-alert login [--port 8765]     # browser UI: Login with Kite OR paste token
 nse-alert set-token ACCESS_TOKEN  # write token into .env
 nse-alert watch [--threshold 4,7,11,13] [--feed mock|kite] [--max-ticks N]
