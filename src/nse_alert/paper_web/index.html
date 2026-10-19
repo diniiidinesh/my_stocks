@@ -258,11 +258,27 @@
         display: block;
       }
       aside {
-        display: flex;
-        overflow: auto;
-        padding: 5px;
+        display: block;
+        padding: 8px;
         height: auto;
         position: static;
+      }
+      #watch {
+        display: flex;
+        overflow-x: auto;
+        max-height: 115px;
+      }
+      #search {
+        margin-bottom: 8px;
+      }
+      .stock {
+        flex-shrink: 0;
+      }
+      header {
+        height: auto;
+        min-height: 68px;
+        flex-wrap: wrap;
+        gap: 8px;
       }
       .stock {
         min-width: 140px;

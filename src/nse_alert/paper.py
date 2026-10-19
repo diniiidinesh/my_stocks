@@ -307,6 +307,12 @@ class PaperBook:
 
     def snapshot(self, *, full=False):
         with self.lock:
+            current = self._day()
+            clock = self.now().astimezone(IST)
+            in_hours = not self.live or (clock.weekday() < 5 and time(9, 15) <= clock.time() < self.cutoff)
+            entries_open = (in_hours and not current['finalized'] and self.day() not in self.data['halted']
+                            and not any(o['status'] == 'open' and o['day'] != self.day() for o in self.data['orders'])
+                            and (not self.data['loss_cap'] or self._net() > -self.data['loss_cap']))
             streak, ledger = 0, []
             for key, day in sorted(self.data['days'].items()):
                 net = rounded(day['gross'] - day['paid'])
@@ -316,7 +322,7 @@ class PaperBook:
                 ledger.append(dict(date=key, net=net, streak=streak, **day))
             market = [{k: v for k, v in q.items() if k != 'token' and (full or k != 'candles')}
                       | {'fresh': self._fresh(q['symbol'])} for q in self.market.values()]
-            result = dict(charge_model='NSE cash intraday · Zerodha schedule checked 2026-10-19 · per-order paise estimates', mode='live' if self.live else 'mock', cash=self.data['cash'], capital=self.data['capital'],
+            result = dict(entries_open=entries_open, charge_model='NSE cash intraday · Zerodha schedule checked 2026-10-19 · per-order paise estimates', mode='live' if self.live else 'mock', cash=self.data['cash'], capital=self.data['capital'],
                           loss_cap=self.data['loss_cap'], slippage_bps=self.data['slippage_bps'],
                           net=self._net(), paid=self._day()['paid'], charge_breakdown=self._day()['charges'],
                           orders=self.data['orders'], sessions=ledger, streak=streak,

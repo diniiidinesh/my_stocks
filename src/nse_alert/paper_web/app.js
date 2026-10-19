@@ -107,8 +107,8 @@ function render() {
       : "MOCK PRICES · PAPER TRADES";
   $("connection").textContent =
     state.feed_error ||
-    `${state.date} · Square-off ${state.cutoff} IST${state.mode === "mock" ? " · Mock streak only" : ""}`;
-  $("place").disabled = !a.fresh;
+    `${state.entries_open ? "Entries open" : "Entries closed"} · ${state.date} · Square-off ${state.cutoff} IST${state.mode === "mock" ? " · Mock streak only" : ""}`;
+  $("place").disabled = !a.fresh || (!editingId && !state.entries_open);
   $("positions").innerHTML =
     state.orders
       .filter((o) => ["open", "pending"].includes(o.status))
@@ -257,7 +257,8 @@ $("place").onclick = async () => {
   } catch (e) {
     toast(e.message);
   } finally {
-    button.disabled = !assets[selected]?.fresh;
+    button.disabled =
+      !assets[selected]?.fresh || (!editingId && !state.entries_open);
   }
 };
 function cancelEdit(redraw = true) {

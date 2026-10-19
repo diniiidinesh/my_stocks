@@ -160,3 +160,16 @@ def test_fee_model_includes_all_components():
     assert fees['stt'] == 25
     assert fees['stamp'] == 0
     assert fees['total'] == pytest.approx(sum(v for k, v in fees.items() if k != 'total'))
+
+
+def test_entry_status_reflects_session_clock_and_cap(desk):
+    book, now, _ = desk
+    assert book.snapshot()['entries_open']
+    now[0] = now[0].replace(hour=15, minute=5)
+    assert not book.snapshot()['entries_open']
+
+
+def test_entry_status_false_for_latched_daily_cap(desk):
+    book, _, _ = desk
+    book.data['halted'].append(book.day())
+    assert not book.snapshot()['entries_open']
