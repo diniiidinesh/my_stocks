@@ -117,3 +117,12 @@ Run: `uv run pytest`.
 configuration, never the order executor or Telegram listener. An optional Compose
 `paper` profile is the production supervisor; it exposes only VM loopback port
 8787 for SSH-tunnel access. See [PAPER.md](PAPER.md).
+
+### Telegram paper confirmations
+
+In `TRADE_MODE=paper`, `watch` writes P-prefixed alert offers through
+`paper_offers.py`. The single `paper_telegram.py` consumer in the paper service
+confirms them into `PaperBook`, with atomic message receipts and unique offer
+references. The watcher does not start a confirmation poller or run real-order
+management in this mode. Live/mock offer stores are distinct; both Telegram
+consumer implementations share a bot lock in the common state directory.

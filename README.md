@@ -70,7 +70,8 @@ Details: [docs/LOGIN.md](docs/LOGIN.md) · alerts: [docs/ALERTS.md](docs/ALERTS.
 
 A separate browser desk uses live Kite prices with a persistent simulated ledger,
 chart-drawn entry/stop/target levels, estimated charges and a seven-day net-profit
-streak. It never calls broker order APIs. See [Paperkite setup](docs/PAPER.md) for
+streak. `TRADE_MODE=paper` routes alert `/confirm` commands to this same simulated
+ledger. It never calls broker order APIs. See [Paperkite setup](docs/PAPER.md) for
 Docker and SSH-tunnel access. The hosted design preview remains a mock demo.
 
 ## CLI

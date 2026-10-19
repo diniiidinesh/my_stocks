@@ -36,12 +36,15 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
+    paper_telegram_user_ids: str = Field(default="", alias="PAPER_TELEGRAM_ALLOWED_USER_IDS")
 
     custom_universe_file: str = Field(default="", alias="CUSTOM_UNIVERSE_FILE")
     state_dir: Path = Field(default=Path(".nse_alert"), alias="STATE_DIR")
 
     # Trading — test defaults: BUY only on +13%, SL 2% below entry
     trade_mode: str = Field(default="off", alias="TRADE_MODE")
+    paper_stop_loss_pct: float = Field(default=3.0, gt=0, lt=100, alias="PAPER_STOP_LOSS_PCT")
+    paper_target_pct: float = Field(default=6.0, gt=0, alias="PAPER_TARGET_PCT")
     trade_qty: int = Field(default=1, alias="TRADE_QTY")
     # margin = size so MIS margin ≈ TRADE_MARGIN_INR; fixed = use TRADE_QTY
     trade_sizing: str = Field(default="margin", alias="TRADE_SIZING")
@@ -182,9 +185,13 @@ class Settings(BaseSettings):
         return parse_thresholds(text)
 
     @property
+    def paper_trading(self) -> bool:
+        return self.trade_mode.strip().lower() == "paper"
+
+    @property
     def resolved_trade_mode(self) -> TradeMode:
         mode = self.trade_mode.strip().lower()
-        if mode not in {"off", "dry_run", "confirm", "auto"}:
+        if mode not in {"off", "dry_run", "confirm", "auto", "paper"}:
             return "off"
         return mode  # type: ignore[return-value]
 
@@ -215,6 +222,8 @@ class Settings(BaseSettings):
 
     @property
     def resolved_squareoff_mode(self) -> str:
+        if self.paper_trading:
+            return "off"
         mode = self.squareoff_mode.strip().lower()
         return mode if mode in {"dry_run", "live"} else "off"
 

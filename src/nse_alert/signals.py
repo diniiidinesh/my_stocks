@@ -715,7 +715,7 @@ def format_signal_message(
             "Order: " + " · ".join(f"{side} `/confirm {pid}`" for side, pid in offers)
         )
         lines.append("_(qty sized at confirm; SL attached)_")
-    elif note:
+    if note:
         lines.append("")
         lines.append(note)
     return "\n".join(lines)
@@ -960,7 +960,7 @@ def _digest_entry_html(sig: Signal, offers: list[tuple[str, str]], note: str | N
         lines[0] += f" · {escape(' · '.join(tags))}"
     if offers:
         lines.append(" · ".join(f"{side} <code>/confirm {pid}</code>" for side, pid in offers))
-    elif note:
+    if note:
         lines.append(f"<i>{escape(note)}</i>")
     return "\n".join(lines)
 

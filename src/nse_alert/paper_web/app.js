@@ -107,7 +107,7 @@ function render() {
       : "MOCK PRICES · PAPER TRADES";
   $("connection").textContent =
     state.feed_error ||
-    `${state.entries_open ? "Entries open" : "Entries closed"} · ${state.date} · Square-off ${state.cutoff} IST${state.mode === "mock" ? " · Mock streak only" : ""}`;
+    `${state.entries_open ? "Entries open" : "Entries closed"} · ${state.date} · Square-off ${state.cutoff} IST · Telegram: ${state.telegram_status || "disabled"}${state.mode === "mock" ? " · Mock streak only" : ""}`;
   $("place").disabled = !a.fresh || (!editingId && !state.entries_open);
   $("positions").innerHTML =
     state.orders

@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Callable
 from typing import Any
+from pathlib import Path
 
 import httpx
 
@@ -98,7 +99,10 @@ class TelegramConfirmListener:
         on_cancel: Callable[[str], None] | None = None,
         poll_sec: float = 2.0,
         on_health_alert: Callable[[str], None] | None = None,
+        state_dir: Path | None = None,
     ) -> None:
+        self.state_dir = state_dir
+        self._poll_lock = None
         self.bot_token = bot_token
         self.chat_id = normalize_chat_id(chat_id)
         self.allowed_chat_ids = configured_chat_ids(chat_id)
@@ -119,9 +123,12 @@ class TelegramConfirmListener:
         self._alerted = False
 
     def start(self) -> None:
+        if self.state_dir is not None:
+            from nse_alert.lock import acquire_telegram_poller
+            self._poll_lock = acquire_telegram_poller(self.state_dir, self.bot_token)
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._run, name="telegram-confirm", daemon=True
+            target=self._run_guarded, name="telegram-confirm", daemon=True
         )
         self._thread.start()
         logger.info("Telegram confirm listener started (chat_id=%s)", self.chat_id)
@@ -130,6 +137,15 @@ class TelegramConfirmListener:
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3.0)
+
+    def _run_guarded(self) -> None:
+        try:
+            self._run()
+        finally:
+            if self._poll_lock is not None:
+                from nse_alert.lock import release_single_instance
+                release_single_instance(self._poll_lock)
+                self._poll_lock = None
 
     def _clear_webhook_once(self) -> None:
         if self._webhook_cleared:

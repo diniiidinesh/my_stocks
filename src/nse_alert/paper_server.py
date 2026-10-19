@@ -200,7 +200,7 @@ def paper_cmd(feed, host, port):
     kite = None
     state_dir = settings.state_dir / ('paper-live' if live else 'paper-mock')
     lock = acquire_single_instance(state_dir)
-    price_feed = server = book = worker = None
+    price_feed = server = book = worker = telegram = None
     stop = threading.Event()
     try:
         if live:
@@ -223,6 +223,15 @@ def paper_cmd(feed, host, port):
         book = PaperBook(state_dir / 'ledger.sqlite3', instruments, live=live,
                          cutoff=hhmm_to_time(settings.squareoff_hhmm))
         server = PaperServer((host, port), book, kite)
+        if settings.paper_trading:
+            from nse_alert.paper_telegram import PaperTelegram
+            if not settings.telegram_configured:
+                raise click.ClickException('TRADE_MODE=paper needs Telegram bot token and chat IDs')
+            telegram = PaperTelegram(book, bot_token=settings.telegram_bot_token,
+                chat_ids=settings.telegram_chat_id, user_ids=settings.paper_telegram_user_ids,
+                state_dir=settings.state_dir)
+            telegram.start()
+            book.telegram_status = 'listening'
         def health(_message):
             with book.lock:
                 book.feed_error = 'Kite feed interrupted. Quotes expire after 15 seconds. Check connection and daily login.'
@@ -252,6 +261,8 @@ def paper_cmd(feed, host, port):
         pass
     finally:
         stop.set()
+        if telegram:
+            telegram.stop()
         if price_feed:
             price_feed.stop()
         if server:
