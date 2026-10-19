@@ -159,7 +159,12 @@ async function refresh() {
     const next = await api("/api/state");
     csrf = next.csrf;
     const symbol = assets[selected]?.symbol;
-    const old = new Map(assets.map((a) => [a.symbol, a.candles]));
+    const old = new Map(
+      assets.map((a) => [
+        a.symbol,
+        { candles: a.candles, interval: a.interval },
+      ]),
+    );
     state = next;
     if (
       editingId &&
@@ -170,7 +175,8 @@ async function refresh() {
     }
     assets = state.market.map((a) => ({
       ...a,
-      candles: old.get(a.symbol) || [],
+      candles: old.get(a.symbol)?.candles || [],
+      interval: old.get(a.symbol)?.interval,
     }));
     selected = Math.max(
       0,
@@ -188,11 +194,20 @@ async function refresh() {
 async function loadChart() {
   if (!assets.length || chartBusy) return;
   chartBusy = true;
-  const symbol = assets[selected].symbol;
+  const symbol = assets[selected].symbol,
+    interval = $("tf").value;
   try {
-    const data = await api("/api/chart?symbol=" + encodeURIComponent(symbol));
+    const data = await api(
+      "/api/chart?symbol=" +
+        encodeURIComponent(symbol) +
+        "&interval=" +
+        interval,
+    );
     const a = assets.find((a) => a.symbol === symbol);
-    if (a) a.candles = data.candles;
+    if (a) {
+      a.candles = data.candles;
+      a.interval = interval;
+    }
     chartSymbol = symbol;
     chartError = "";
     if (assets[selected].symbol === symbol) render();
@@ -201,7 +216,8 @@ async function loadChart() {
     render();
   } finally {
     chartBusy = false;
-    if (assets[selected]?.symbol !== symbol) loadChart();
+    if (assets[selected]?.symbol !== symbol || $("tf").value !== interval)
+      loadChart();
   }
 }
 function saveDrawing() {
@@ -332,105 +348,6 @@ async function exportData() {
     toast(e.message);
   }
 }
-function draw() {
-  const w = canvas.clientWidth,
-    h = 340,
-    dpr = window.devicePixelRatio || 1;
-  canvas.width = w * dpr;
-  canvas.height = h * dpr;
-  ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, w, h);
-  if (!assets.length) return;
-  const source = assets[selected].candles,
-    seconds = [60, 300, 900][$("tf").selectedIndex],
-    groups = new Map();
-  for (const c of source) {
-    const key = Math.floor(c.time / seconds) * seconds;
-    let b = groups.get(key);
-    if (!b) groups.set(key, { ...c, time: key });
-    else
-      Object.assign(b, {
-        c: c.c,
-        h: Math.max(b.h, c.h),
-        l: Math.min(b.l, c.l),
-      });
-  }
-  const cs = [...groups.values()].slice(-65);
-  if (!cs.length) {
-    ctx.fillStyle = "#8da1b7";
-    ctx.fillText("Waiting for chart data…", 20, 30);
-    return;
-  }
-  let vals = cs
-    .flatMap((c) => [c.h, c.l])
-    .concat(
-      ["entry", "stop", "target"]
-        .map((id) => +$(id).value)
-        .filter((v) => v > 0),
-    );
-  const lo = Math.min(...vals),
-    hi = Math.max(...vals),
-    pad = (hi - lo) * 0.15 || 1;
-  range = { min: lo - pad, max: hi + pad };
-  const y = (p) =>
-    h - 25 - ((p - range.min) / (range.max - range.min)) * (h - 45);
-  ctx.font = "11px system-ui";
-  for (let i = 0; i < 6; i++) {
-    const p = range.min + ((range.max - range.min) * i) / 5,
-      yy = y(p);
-    ctx.strokeStyle = "#23303d";
-    ctx.beginPath();
-    ctx.moveTo(0, yy);
-    ctx.lineTo(w - 65, yy);
-    ctx.stroke();
-    ctx.fillStyle = "#778a9e";
-    ctx.fillText(p.toFixed(2), w - 60, yy + 4);
-  }
-  const cw = (w - 75) / cs.length;
-  cs.forEach((c, i) => {
-    const x = i * cw + cw / 2;
-    ctx.strokeStyle = ctx.fillStyle = c.c >= c.o ? "#55c9ad" : "#df7886";
-    ctx.beginPath();
-    ctx.moveTo(x, y(c.h));
-    ctx.lineTo(x, y(c.l));
-    ctx.stroke();
-    ctx.fillRect(
-      x - cw * 0.3,
-      Math.min(y(c.o), y(c.c)),
-      Math.max(2, cw * 0.6),
-      Math.max(1, Math.abs(y(c.o) - y(c.c))),
-    );
-    if (i % Math.max(1, Math.floor(cs.length / 4)) === 0) {
-      ctx.fillStyle = "#8291a3";
-      ctx.fillText(
-        new Date(c.time * 1000).toLocaleTimeString("en-IN", {
-          timeZone: "Asia/Kolkata",
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        x,
-        h - 3,
-      );
-    }
-  });
-  for (const [id, col] of [
-    ["entry", "#7eafff"],
-    ["stop", "#ed8391"],
-    ["target", "#55d2b0"],
-  ]) {
-    const p = +$(id).value;
-    if (!p) continue;
-    ctx.strokeStyle = col;
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath();
-    ctx.moveTo(0, y(p));
-    ctx.lineTo(w - 65, y(p));
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = col;
-    ctx.fillText(id.toUpperCase() + " " + p.toFixed(2), 8, y(p) - 6);
-  }
-}
 function chartPrice(ev) {
   const y = ev.clientY - canvas.getBoundingClientRect().top;
   return Math.max(
@@ -467,7 +384,19 @@ for (const id of ["entry", "stop", "target", "qty"])
     draw();
     if (id !== "qty") saveDrawing();
   };
-$("tf").onchange = draw;
+$("tf").onchange = () => {
+  try {
+    localStorage.setItem("paperkite-timeframe", $("tf").value);
+  } catch {}
+  draw();
+  loadChart();
+};
+$("barCount").onchange = draw;
+try {
+  const saved = localStorage.getItem("paperkite-timeframe");
+  if (["minute", "5minute", "15minute", "60minute", "day"].includes(saved))
+    $("tf").value = saved;
+} catch {}
 $("search").oninput = render;
 window.onresize = draw;
 settings.addEventListener("toggle", () => {

@@ -27,39 +27,69 @@ class PaperServer(ThreadingHTTPServer):
         self.book, self.kite = book, kite
         self.csrf = secrets.token_urlsafe(32)
         self.history_lock = threading.Lock()
-        self.history: dict[str, tuple[float, list]] = {}
+        self.history: dict[tuple[str, str], tuple[float, list]] = {}
+        self.last_history_request = 0.0
 
-    def candles(self, symbol):
-        if symbol not in self.book.market:
-            raise ValueError('Unknown stock')
+    def candles(self, symbol, interval='minute'):
+        periods = {'minute': (5, 60), '5minute': (20, 300), '15minute': (45, 900),
+                   '60minute': (120, 3600), 'day': (500, 86400)}
+        if symbol not in self.book.market or interval not in periods:
+            raise ValueError('Unknown stock or unsupported timeframe')
+        days, seconds = periods[interval]
+        key = (symbol, interval)
+        cached = None
         if self.kite:
             with self.history_lock:
-                cached = self.history.get(symbol)
+                cached = self.history.get(key)
                 if not cached or clock.monotonic() - cached[0] > 60:
                     now = datetime.now(IST)
                     try:
+                        clock.sleep(max(0, .5 - (clock.monotonic() - self.last_history_request)))
+                        self.last_history_request = clock.monotonic()
                         rows = self.kite.historical_data(self.book.market[symbol]['token'],
-                            now - timedelta(days=5), now, 'minute')
+                            now - timedelta(days=days), now, interval)
                         candles = [dict(time=int(c['date'].timestamp()), o=c['open'],
-                            h=c['high'], l=c['low'], c=c['close']) for c in rows]
-                        self.history[symbol] = (clock.monotonic(), candles)
+                            h=c['high'], l=c['low'], c=c['close'], v=c.get('volume')) for c in rows][-700:]
+                        self.history[key] = (clock.monotonic(), candles)
+                        # Bound chart caches on the small VM; only requested charts are retained.
+                        while len(self.history) > 12:
+                            del self.history[next(iter(self.history))]
                     except Exception:
                         logger.warning('Historical chart unavailable for %s', symbol)
                         if not cached:
                             raise ValueError('Historical data unavailable; check Kite access and daily login')
-                cached = self.history.get(symbol)
-        else:
-            cached = None
+                cached = self.history.get(key)
         with self.book.lock:
             merged = {c['time']: c.copy() for c in (cached[1] if cached else [])}
+            live = {}
             for c in self.book.market[symbol]['candles']:
-                if c['time'] in merged:
-                    old = merged[c['time']]
-                    merged[c['time']] = dict(time=c['time'], o=old['o'], c=c['c'],
-                        h=max(c['h'], old['h']), l=min(c['l'], old['l']))
+                # Intraday buckets start at 09:15 IST, matching exchange candles.
+                dt = datetime.fromtimestamp(c['time'], IST)
+                anchor = int(dt.replace(hour=0 if interval == 'day' else 9,
+                    minute=0 if interval == 'day' else 15, second=0, microsecond=0).timestamp())
+                # After-hours prints must not extend the regular cash-session chart.
+                if self.book.live and not (9*60+15 <= dt.hour*60+dt.minute < 15*60+30):
+                    continue
+                bucket = anchor + ((c['time'] - anchor) // seconds) * seconds
+                if bucket not in live:
+                    live[bucket] = dict(c, time=bucket)
                 else:
-                    merged[c['time']] = c.copy()
-        return [merged[k] for k in sorted(merged)][-2000:]
+                    b = live[bucket]
+                    b.update(c=c['c'], h=max(b['h'], c['h']), l=min(b['l'], c['l']))
+            current = self.book.now().astimezone(IST)
+            current_anchor = int(current.replace(hour=0 if interval == 'day' else 9,
+                minute=0 if interval == 'day' else 15, second=0, microsecond=0).timestamp())
+            current_bucket = current_anchor + ((int(current.timestamp()) - current_anchor) // seconds) * seconds
+            for bucket, c in live.items():
+                if bucket in merged and bucket != current_bucket:
+                    continue
+                if bucket in merged:
+                    old = merged[bucket]
+                    # Historical volume is authoritative and refreshed each minute.
+                    merged[bucket] = dict(old, c=c['c'], h=max(c['h'], old['h']), l=min(c['l'], old['l']))
+                else:
+                    merged[bucket] = dict(c, v=None)
+        return [merged[k] for k in sorted(merged)][-700:]
 
 
 class PaperHandler(BaseHTTPRequestHandler):
@@ -94,11 +124,12 @@ class PaperHandler(BaseHTTPRequestHandler):
                 return self.reply(200, self.server.book.snapshot() | {'csrf': self.server.csrf})
             if url.path == '/api/chart':
                 symbol = parse_qs(url.query).get('symbol', [''])[0]
-                return self.reply(200, {'candles': self.server.candles(symbol)})
+                interval = parse_qs(url.query).get('interval', ['minute'])[0]
+                return self.reply(200, {'candles': self.server.candles(symbol, interval), 'interval': interval})
             if url.path == '/api/export':
                 return self.reply(200, self.server.book.snapshot(full=True))
-            if url.path in {'/', '/index.html', '/app.js'}:
-                path = WEB / ('app.js' if url.path == '/app.js' else 'index.html')
+            if url.path in {'/', '/index.html', '/app.js', '/indicators.js', '/chart.js'}:
+                path = WEB / (url.path.lstrip('/') if url.path.endswith('.js') else 'index.html')
                 mime = 'application/javascript; charset=utf-8' if path.suffix == '.js' else 'text/html; charset=utf-8'
                 return self.reply(200, path.read_bytes(), mime)
             self.reply(404, {'error': 'Not found'})

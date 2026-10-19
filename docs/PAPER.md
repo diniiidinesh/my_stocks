@@ -74,10 +74,9 @@ positions until you choose **Edit levels** and **Update paper position levels**.
 Protection can be trailed above entry to protect profit, provided the stop remains
 below the current quote. The entry fill and quantity remain unchanged.
 
-Historical charts request five calendar days of Kite minute candles, cached for
-60 seconds per symbol, merged with live candles. The UI refreshes prices every
-two seconds and charts every ten seconds. Changing timeframe aggregates by clock
-buckets. Historical request failures are shown, not replaced with synthetic data.
+Historical charts request native Kite candles for the selected timeframe, cached
+for 60 seconds per stock/timeframe and merged with live updates. The UI refreshes
+prices every two seconds and charts every ten seconds. Historical request failures are shown, not replaced with synthetic data.
 Only symbols in the configured cash-equity universe are available.
 
 ## Execution and data limits
@@ -146,3 +145,35 @@ uv run pytest -q
 
 Related code: `paper.py` (accounting), `paper_server.py` (HTTP/feed wiring),
 `paper_web/` (browser), `tests/test_paper.py`, `tests/test_paper_server.py`.
+
+## Chart indicators (screenshot preset)
+
+Use **Indicators & settings** to toggle studies and adjust their parameters. The
+preset is SMA 21/65; EMA 5/9/10; Bollinger Bands 20 with 2 population-standard
+deviations; SuperTrend ATR 14 × factor 4; volume with EMA 20; RSI 14; MACD 12/26/9
+(all EMA); and ADX smoothing 25 with DI length 14. MA is interpreted as simple MA.
+ADX's two lengths can be adjusted if your original chart uses another ordering.
+Open interest is not shown for cash equities. Preferences are stored in this
+browser; **Screenshot defaults** restores the preset.
+
+Price overlays remain on the price chart, with separate volume, RSI, MACD and ADX
+panes. Native Kite 1-minute, 5-minute, 15-minute, 1-hour and daily candles are
+requested for the selected stock/timeframe. Warm-up history is up to 700 candles
+from windows of 5/20/45/120/500 calendar days respectively. The chart can show
+65/100/180 candles while calculations use the full loaded history.
+
+Calculations run in the browser, not on the 1 GB VM. Wilder indicators use
+SMA-seeded RMA; EMA is SMA-seeded. Insufficient history produces a **warming up**
+label rather than fabricated values. Exact values may differ from Kite/TradingView
+because of seed history, data adjustments, missing bars and unfinished candles;
+this is not a licensed TradingView chart engine. Studies can change until a bar
+closes. Indicator visibility does not change paper execution rules.
+
+Volume comes from Kite historical candles and refreshes about once a minute;
+price-only live candles show volume as unavailable until historical volume arrives.
+Intraday aggregation for live updates starts at 09:15 IST. Out-of-session price
+prints do not create chart candles. Native daily candles preserve Kite volume.
+Only 12 stock/timeframe history caches are retained, with 60-second refresh and
+request spacing, to limit VM memory and API load.
+
+Indicator calculation tests: `node tests/browser/test_indicators.cjs`.

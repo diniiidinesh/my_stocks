@@ -83,3 +83,29 @@ def test_chart_combines_historical_and_live_candle(server):
     assert candles[-1]['h'] == 103
     assert candles[-1]['l'] == 97
     assert candles[-1]['c'] == 103
+
+
+def test_native_timeframes_include_volume_and_use_separate_cache(server):
+    calls = []
+    class FakeKite:
+        def historical_data(self, token, start, end, interval):
+            from datetime import datetime
+            from nse_alert.paper import IST
+            calls.append(interval)
+            stamp = datetime(2026, 10, 19, 0 if interval == 'day' else 9, 0 if interval == 'day' else 15, tzinfo=IST)
+            return [dict(date=stamp,
+                         open=98, high=102, low=97, close=100, volume=12345)]
+    server.kite = FakeKite()
+    assert server.candles('AAA', '15minute')[0]['v'] == 12345
+    assert server.candles('AAA', 'day')[0]['v'] == 12345
+    server.candles('AAA', '15minute')
+    assert calls == ['15minute', 'day']
+    with pytest.raises(ValueError):
+        server.candles('AAA', 'unsupported')
+
+
+def test_indicator_scripts_are_served(server):
+    for path in ['/indicators.js', '/chart.js']:
+        status, content = call(server, path)
+        assert status == 200
+        assert len(content) > 100

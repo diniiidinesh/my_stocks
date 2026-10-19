@@ -365,9 +365,11 @@
               <span id="quote" class="muted"></span>
             </div>
             <select id="tf" style="width: 110px">
-              <option>1 minute</option>
-              <option>5 minutes</option>
-              <option>15 minutes</option>
+              <option value="minute">1 minute</option>
+              <option value="5minute">5 minutes</option>
+              <option value="15minute" selected>15 minutes</option>
+              <option value="60minute">1 hour</option>
+              <option value="day">Daily</option>
             </select>
           </div>
           <div class="toolbar">
@@ -378,7 +380,66 @@
               >Click chart to place · drag lines to adjust</span
             >
           </div>
+          <div class="toolbar">
+            <button onclick="openStudies()">Indicators & settings</button
+            ><label style="margin: 0"
+              >Visible candles
+              <select id="barCount" style="width: 85px">
+                <option>65</option>
+                <option selected>100</option>
+                <option>180</option>
+              </select></label
+            >
+          </div>
+          <div id="ohlc" class="notice"></div>
+          <div id="studyLegend" class="notice" style="min-height: 42px"></div>
           <canvas id="chart"></canvas>
+          <div
+            id="volumePane"
+            style="border-top: 1px solid #293744; margin-top: 10px"
+          >
+            <div id="volumeValue" class="notice"></div>
+            <canvas
+              id="volumeChart"
+              style="height: 105px; cursor: default; touch-action: auto"
+            ></canvas>
+          </div>
+          <div
+            id="rsiPane"
+            style="border-top: 1px solid #293744; margin-top: 10px"
+          >
+            <div id="rsiValue" class="notice"></div>
+            <canvas
+              id="rsiChart"
+              style="height: 105px; cursor: default; touch-action: auto"
+            ></canvas>
+          </div>
+          <div
+            id="macdPane"
+            style="border-top: 1px solid #293744; margin-top: 10px"
+          >
+            <div id="macdValue" class="notice"></div>
+            <canvas
+              id="macdChart"
+              style="height: 105px; cursor: default; touch-action: auto"
+            ></canvas>
+          </div>
+          <div
+            id="adxPane"
+            style="border-top: 1px solid #293744; margin-top: 10px"
+          >
+            <div id="adxValue" class="notice"></div>
+            <canvas
+              id="adxChart"
+              style="height: 105px; cursor: default; touch-action: auto"
+            ></canvas>
+          </div>
+          <p class="notice">
+            Indicators use loaded candle history; values can differ from Kite
+            during warm-up or on an unfinished candle. Volume is historical Kite
+            volume, refreshed each minute. ADX 25/14 means smoothing 25, DI
+            length 14. Open interest is omitted for cash equities.
+          </p>
           <div class="notice">
             Chart lines plan your next order. Use “Edit levels” on an open
             position to adjust its protection. Stops fill at the next observed
@@ -539,5 +600,16 @@
     <button onclick="saveSettings()">Save settings</button>
     <button onclick="settings.close()">Close</button>
   </dialog>
+  <dialog id="studies">
+    <h2>Chart indicators</h2>
+    <div id="studySwitches"></div>
+    <div id="studyFields" class="fields"></div>
+    <p id="studyError" class="red" role="status"></p>
+    <button onclick="saveStudies()">Apply</button>
+    <button onclick="saveStudies(true)">Screenshot defaults</button>
+    <button onclick="document.getElementById('studies').close()">Cancel</button>
+  </dialog>
+  <script src="indicators.js"></script>
+  <script src="chart.js"></script>
   <script src="app.js"></script>
 </html>
