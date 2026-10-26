@@ -18,7 +18,7 @@ let editingId = null;
 let state,
   assets = [],
   selected = 0,
-  mode = "entry",
+  mode = "pan",
   drag = null,
   csrf = "",
   range = { min: 0, max: 1 },
@@ -31,6 +31,7 @@ const canvas = $("chart"),
   ctx = canvas.getContext("2d");
 function toast(s) {
   $("toast").textContent = s;
+  $("ticketMessage").textContent = s;
 }
 async function api(path, body) {
   const r = await fetch(path, {
@@ -52,7 +53,10 @@ function defaultStop() {
 }
 function choose(i) {
   cancelEdit(false);
+  if (!assets[i]) return;
   selected = i;
+  viewOffset = 0;
+  crosshair = null;
   const a = assets[i],
     d = state.drawings[a.symbol];
   $("entry").value = (d?.entry || a.price).toFixed(2);
@@ -69,19 +73,19 @@ function risk() {
     q = +$("qty").value;
   $("risk").textContent =
     `Planned risk ${money(Math.max(0, e - s) * q)} · Reward ${money(Math.max(0, t - e) * q)} · Costs extra`;
+  $("planSummary").textContent = `Entry ${money(e)} · Stop ${money(s)} · Target ${money(t)} · Qty ${q}`;
+  $("ticketFunds").textContent = `Order value ≈ ${money(e*q)} + charges · Available ${money(state?.cash || 0)}`;
 }
 function render() {
   if (!state || !assets.length) return;
   const a = assets[selected],
     query = $("search").value.toUpperCase();
-  $("watch").innerHTML = assets
-    .map((x, i) => [x, i])
-    .filter(([x]) => x.symbol.includes(query))
-    .map(
-      ([x, i]) =>
-        `<div class="stock ${i === selected ? "active" : ""}" onclick="choose(${i})"><div>${esc(x.symbol)}<small>NSE · ${x.fresh ? "Fresh" : "Awaiting quote"}</small></div><div>${x.price.toFixed(2)}<small class="${x.price >= x.base ? "green" : "red"}">${x.base ? ((x.price / x.base - 1) * 100).toFixed(2) : "—"}%</small></div></div>`,
-    )
-    .join("");
+  const matches = assets.map((x, i) => [x, i]).filter(([x]) =>
+    `${x.symbol} ${x.name || ""}`.toUpperCase().includes(query.trim()));
+  $("searchCount").textContent = `${matches.length} of ${assets.length} stocks · liquidity-screened NSE cash`;
+  $("watch").innerHTML = matches.map(([x,i]) =>
+    `<button class="stock ${i === selected ? "active" : ""}" aria-pressed="${i === selected}" onclick="choose(${i})"><span>${esc(x.symbol)}<small>${esc(x.name || "NSE")} · ${x.fresh ? "Fresh" : "Awaiting quote"}</small></span><span class="stock-price">${x.price.toFixed(2)}<small class="${x.price >= x.base ? "green" : "red"}">${x.base ? ((x.price / x.base - 1) * 100).toFixed(2) : "—"}%</small></span></button>`
+  ).join("") || '<p class="notice">No matching stock in today’s screened universe. Try its NSE symbol or company name. The paper desk follows your configured liquidity filters.</p>';
   $("symbol").textContent = a.symbol + " · NSE";
   $("quote").textContent =
     money(a.price) +
@@ -92,6 +96,8 @@ function render() {
         }) + " IST"
       : "Waiting for stream") +
     (chartError ? " · " + chartError : "");
+  $("ticketSymbol").textContent = (editingId ? "Edit levels · " : "Buy ") + a.symbol;
+  $("ticketQuote").textContent = "NSE · " + money(a.price);
   $("cash").textContent = money(state.cash);
   $("pnl").textContent = money(state.net);
   $("pnl").className = "value " + (state.net >= 0 ? "green" : "red");
@@ -182,7 +188,7 @@ async function refresh() {
       0,
       assets.findIndex((a) => a.symbol === symbol),
     );
-    if (!symbol) choose(selected);
+    if (!symbol && assets.length) choose(selected);
     else render();
   } catch (e) {
     $("connection").textContent = "Disconnected · " + e.message;
@@ -194,6 +200,7 @@ async function refresh() {
 async function loadChart() {
   if (!assets.length || chartBusy) return;
   chartBusy = true;
+  $("chartStatus").textContent = "Loading chart history…";
   const symbol = assets[selected].symbol,
     interval = $("tf").value;
   try {
@@ -210,9 +217,11 @@ async function loadChart() {
     }
     chartSymbol = symbol;
     chartError = "";
+    $("chartStatus").textContent = "";
     if (assets[selected].symbol === symbol) render();
   } catch (e) {
     chartError = e.message;
+    $("chartStatus").textContent = "Chart history unavailable: " + e.message + ". Indicators need candle history. Check your daily Kite login and historical-data access.";
     render();
   } finally {
     chartBusy = false;
@@ -251,6 +260,7 @@ $("place").onclick = async () => {
       });
       cancelEdit();
       toast("Paper position levels updated.");
+      $("orderTicket").close();
       await refresh();
       return;
     }
@@ -269,6 +279,7 @@ $("place").onclick = async () => {
           ? "Paper position opened."
           : "Paper order queued.",
     );
+    if (o.status !== "rejected") $("orderTicket").close();
     await refresh();
   } catch (e) {
     toast(e.message);
@@ -279,10 +290,11 @@ $("place").onclick = async () => {
 };
 function cancelEdit(redraw = true) {
   editingId = null;
-  $("place").textContent = "Place paper order";
+  $("place").textContent = "Buy · Paper order";
   $("cancelEdit").hidden = true;
   $("entry").readOnly = $("qty").readOnly = false;
   $("type").disabled = false;
+  syncOrderType();
   if (redraw) render();
 }
 function editProtection(id) {
@@ -300,7 +312,7 @@ function editProtection(id) {
   $("cancelEdit").hidden = false;
   draw();
   risk();
-  $("place").scrollIntoView({ behavior: "smooth", block: "center" });
+  openTicket();
 }
 async function act(id) {
   try {
@@ -357,6 +369,12 @@ function chartPrice(ev) {
 }
 canvas.onpointerdown = (e) => {
   const p = chartPrice(e);
+  crosshair = null;
+  if (mode === "pan") {
+    panStart = {x:e.clientX, offset:viewOffset};
+    canvas.setPointerCapture(e.pointerId);
+    return;
+  }
   drag =
     (editingId ? ["stop", "target"] : ["entry", "stop", "target"]).find(
       (id) => Math.abs(+$(id).value - p) / (range.max - range.min) < 0.035,
@@ -367,17 +385,29 @@ canvas.onpointerdown = (e) => {
   risk();
 };
 canvas.onpointermove = (e) => {
+  const rect = canvas.getBoundingClientRect();
+  crosshair = {x:e.clientX-rect.left, y:e.clientY-rect.top};
+  if (panStart) {
+    const a = assets[selected];
+    const count = +$("barCount").value;
+    viewOffset = Math.max(0, Math.min(Math.max(0, (a?.candles.length || 0)-count), Math.round(panStart.offset+(e.clientX-panStart.x)*count/Math.max(1,rect.width-75))));
+    draw();
+    return;
+  }
   if (drag) {
     $(drag).value = chartPrice(e).toFixed(2);
     draw();
     risk();
-  }
+  } else draw();
 };
 canvas.onpointerup = () => {
+  panStart = null;
+  if (drag) saveDrawing();
   drag = null;
-  saveDrawing();
 };
-canvas.onpointercancel = () => (drag = null);
+canvas.onpointercancel = () => { drag = panStart = null; };
+canvas.onpointerleave = () => { crosshair = null; if (!drag && !panStart) draw(); };
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoomChart(e.deltaY > 0 ? 1.15 : 1/1.15); }, {passive:false});
 for (const id of ["entry", "stop", "target", "qty"])
   $(id).oninput = () => {
     risk();
@@ -391,13 +421,27 @@ $("tf").onchange = () => {
   draw();
   loadChart();
 };
-$("barCount").onchange = draw;
+$("barCount").onchange = () => zoomChart(1);
 try {
   const saved = localStorage.getItem("paperkite-timeframe");
   if (["minute", "5minute", "15minute", "60minute", "day"].includes(saved))
     $("tf").value = saved;
 } catch {}
 $("search").oninput = render;
+$("search").onkeydown = (e) => {
+  if (e.key === "Enter") {
+    const q = $("search").value.trim().toUpperCase();
+    const i = assets.findIndex(a => `${a.symbol} ${a.name || ""}`.toUpperCase().includes(q));
+    if (i >= 0) choose(i);
+  }
+};
+$("type").onchange = syncOrderType;
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("chartPanel").classList.contains("expanded")) toggleChart();
+  if (e.target.matches("input,select,textarea") || document.querySelector("dialog[open]")) return;
+  if (e.key === "/") { e.preventDefault(); $("search").focus(); }
+  if (e.key.toLowerCase() === "b") openTicket();
+});
 window.onresize = draw;
 settings.addEventListener("toggle", () => {
   if (settings.open && state) {
@@ -406,6 +450,40 @@ settings.addEventListener("toggle", () => {
     $("slippage").value = state.slippage_bps;
   }
 });
+let viewOffset = 0, crosshair = null, panStart = null;
+function openTicket() {
+  if (!assets.length) return;
+  $("ticketMessage").textContent = "";
+  syncOrderType();
+  if (!$("orderTicket").open) $("orderTicket").showModal();
+}
+function setOrderType(type) { $("type").value = type; syncOrderType(); }
+function syncOrderType() {
+  const type = $("type").value;
+  $("entry").readOnly = !!editingId || type === "market";
+  $("priceLabel").textContent = type === "stop" ? "Trigger price ₹" : type === "market" ? "Reference price ₹" : "Limit price ₹";
+  $("priceHelp").textContent = type === "market" ? "Fills at the fresh quote plus configured slippage." : type === "stop" ? "Triggers at or above this price, then fills at the observed quote." : "Buy at this price or lower.";
+  document.querySelectorAll("[data-order]").forEach(b => { b.setAttribute("aria-pressed", b.dataset.order === type); b.disabled = !!editingId; });
+}
+function setTool(tool) {
+  mode = tool;
+  document.querySelectorAll("[data-tool]").forEach(b => b.setAttribute("aria-pressed",b.dataset.tool === tool));
+  canvas.style.cursor = tool === "pan" ? "grab" : "crosshair";
+}
+function zoomChart(factor) {
+  const raw = +$("barCount").value;
+  $("barCount").value = Math.max(20,Math.min(500,Math.round((Number.isFinite(raw) && raw > 0 ? raw : 100)*factor)));
+  draw();
+}
+function resetViewport() { viewOffset = 0; crosshair = null; draw(); }
+function toggleChart() {
+  const expanded = $("chartPanel").classList.toggle("expanded");
+  $("expandChart").textContent = expanded ? "Collapse chart" : "Expand chart";
+  draw();
+}
+syncOrderType();
+setTool("pan");
+renderStudyChips();
 refresh();
 setInterval(refresh, 2000);
 setInterval(loadChart, 10000);

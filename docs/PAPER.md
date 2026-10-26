@@ -193,3 +193,22 @@ restrictions are available. The browser connection line shows Telegram status.
 Full command, access, sizing and replay rules: [Paper confirmations](ORDERS.md#paper-confirmations-trade_modepaper).
 Live and mock offer stores are separate (`paper-offers-live.sqlite3` and
 `paper-offers-mock.sqlite3`) and never use real `orders.json` confirmations.
+
+
+### Finding the live desk and chart controls
+
+The older `paperkite-dinesh.agileangel128.chatgpt.site` prototype uses synthetic demo data. The live VM desk is a separate service. On the Mac, leave this tunnel running in Terminal:
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+  -L 8787:127.0.0.1:8787 \
+  -i ~/.ssh/LightsailDefaultKey-ap-south-1.pem ubuntu@3.108.18.140
+```
+
+Open `http://localhost:8787/`. Its badge says **Live prices · Paper trades** when connected to the Kite-backed service. Prices still require the normal daily Kite login. A closed tunnel gives a connection error; the desk never falls back to demo prices.
+
+Search by NSE symbol or company name in **Stock search** (or press `/`). Results are restricted to today's configured liquidity-screened universe. Press Enter or choose a result to load its chart. Press `B` or choose **Buy · Paper order** for the order window: Regular, cash intraday, day validity, quantity, Market/Limit/SL-M, stop and target. It is a Kite-inspired paper ticket; it does not implement delivery, short entries, AMO, cover orders, SL-limit or margin leverage. Sell an existing paper position using **Exit**.
+
+Use **Your indicator preset** to restore SMA 21/65, EMA 5/9/10, BB 20/2, SuperTrend 14/4, volume EMA 20, RSI 14, MACD 12/26/9 and ADX 25/14. Indicator chips toggle individual studies; **ƒx Indicators** edits parameters. Chart history errors are shown explicitly. Values require enough historical candles to warm up.
+
+The chart supports drag-to-pan, wheel/button zoom, hover OHLC crosshair, **Latest** to return to current candles, and **Expand chart** (Escape collapses it). Choose Entry, Stop or Target before drawing a trade level. The chart is our own canvas implementation, not TradingView Advanced Charts: TradingView's published license does not currently offer that library for personal projects.
