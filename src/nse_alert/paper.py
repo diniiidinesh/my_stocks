@@ -62,7 +62,7 @@ class PaperBook:
         row = self.db.execute('SELECT body FROM account WHERE id=1').fetchone()
         self.data = json.loads(row[0]) if row else dict(capital=200000, cash=200000,
             loss_cap=0, slippage_bps=5, orders=[], days={}, drawings={}, halted=[])
-        self.market = {i.symbol: dict(symbol=i.symbol, base=i.prev_close,
+        self.market = {i.symbol: dict(symbol=i.symbol, name=getattr(i, 'name', i.symbol), base=i.prev_close,
             price=i.last_price, token=i.instrument_token, updated=0, candles=[]) for i in instruments}
         missing = {o['symbol'] for o in self.data['orders'] if o['status'] == 'open'} - self.market.keys()
         if missing:

@@ -297,6 +297,40 @@
         font-size: 20px;
       }
     }
+
+    :root { color-scheme: dark; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #83b6ff; outline-offset: 3px; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button[aria-pressed="true"], .order-types button[aria-pressed="true"] { color: #91bfff; border-color: #5895f0; background: #1c3451; }
+    .layout { grid-template-columns: 285px minmax(0,1fr); }
+    .stock { width:100%; text-align:left; border-radius:0; background:transparent; border:0; border-bottom:1px solid #202c39; gap:12px; }
+    .stock .stock-price { text-align:right; white-space:nowrap; }
+    .stock small { max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #search { position:sticky; top:0; z-index:1; border-color:#54779e; padding:13px 10px; }
+    .workspace { grid-template-columns:minmax(0,1fr) 230px; align-items:start; }
+    .trade-plan { position:sticky; top:20px; }
+    .buy { background:#4184f3; color:white; margin-top:14px; }
+    #planSummary { line-height:2; margin-bottom:16px; }
+    .candle-count { display:flex; align-items:center; gap:6px; margin:0; }
+    #barCount { width:75px; }
+    #indicatorChips { gap:5px; }
+    #indicatorChips button { padding:5px 9px; font-size:11px; border-radius:3px; }
+    #chartStatus:empty { display:none; }
+    #chartPanel.expanded { position:fixed; inset:12px; z-index:10; overflow:auto; background:#111b26; box-shadow:0 0 0 20px #000b; }
+    #orderTicket { width:min(560px,96vw); padding:0; border-radius:5px; border:1px solid #385174; max-height:92vh; }
+    .ticket-header { background:#4184f3; color:white; padding:20px 24px; display:flex; justify-content:space-between; align-items:center; }
+    .ticket-header h2 { font-size:20px; margin:0 0 6px; }
+    .paper-tag { border:1px solid #a1c4ff; padding:4px 8px; border-radius:3px; font-size:11px; }
+    .ticket-body { padding:12px 24px; }
+    .ticket-tabs { display:flex; gap:22px; border-bottom:1px solid #334255; padding:10px 0; font-size:12px; }
+    .ticket-tabs .selected { color:#8ab7ff; }
+    .ticket-footer { border-top:1px solid #334255; padding:16px 24px; display:flex; align-items:center; justify-content:flex-end; gap:10px; }
+    .ticket-footer .buy { width:auto; margin:0; }
+    .ticket-body h3 { font-size:13px; font-weight:500; margin-top:24px; }
+    .order-types { display:flex; gap:10px; margin-top:10px; }
+    #type { margin-bottom:2px; }
+    @media(max-width:1100px) { .workspace { grid-template-columns:minmax(0,1fr); } .trade-plan { position:static; } }
+    @media(max-width:700px) { .layout { display:block; } aside { position:static; height:auto; } #watch { max-height:230px; overflow:auto; display:block; } .stock { min-width:0; } main { padding:12px; } .ticket-body,.ticket-header { padding:16px; } .ticket-tabs { gap:12px; } }
   </style>
   <header>
     <h1>
@@ -314,12 +348,14 @@
   </header>
   <div class="layout">
     <aside>
-      <h2 class="muted">YOUR WATCHLIST</h2>
+      <h2 class="muted">Stock search</h2>
       <input
         id="search"
         aria-label="Search stocks"
-        placeholder="Search stocks…"
+        placeholder="Search symbol or company…"
+        type="search" autocomplete="off" aria-describedby="searchCount"
       />
+      <p id="searchCount" class="notice" role="status"></p>
       <div id="watch"></div>
       <p class="notice">
         Daily % = move from previous close. Kite credentials stay on this
@@ -358,7 +394,7 @@
         </div>
       </div>
       <div class="workspace">
-        <div class="panel">
+        <div class="panel" id="chartPanel">
           <div class="charthead">
             <div>
               <h2 id="symbol" style="margin: 0"></h2>
@@ -373,24 +409,25 @@
             </select>
           </div>
           <div class="toolbar">
-            <button onclick="mode='entry'">＋ Entry</button
-            ><button onclick="mode='stop'">＋ Stop</button
-            ><button onclick="mode='target'">＋ Target</button
+            <button onclick="setTool('pan')" data-tool="pan" aria-pressed="true">Pan</button>
+            <button onclick="setTool('entry')" data-tool="entry" aria-pressed="false">＋ Entry</button
+            ><button onclick="setTool('stop')" data-tool="stop" aria-pressed="false">＋ Stop</button
+            ><button onclick="setTool('target')" data-tool="target" aria-pressed="false">＋ Target</button
             ><span class="notice"
-              >Click chart to place · drag lines to adjust</span
+              >Pan to browse · select a level tool to draw</span
             >
           </div>
           <div class="toolbar">
-            <button onclick="openStudies()">Indicators & settings</button
-            ><label style="margin: 0"
-              >Visible candles
-              <select id="barCount" style="width: 85px">
-                <option>65</option>
-                <option selected>100</option>
-                <option>180</option>
-              </select></label
-            >
+            <button onclick="openStudies()">ƒx Indicators</button
+            ><button onclick="applyPreset()">Your indicator preset</button>
+            <button onclick="zoomChart(1.25)" aria-label="Zoom out">−</button>
+            <button onclick="zoomChart(.8)" aria-label="Zoom in">＋</button>
+            <label class="candle-count">Candles <input id="barCount" type="number" min="20" max="500" value="100" step="10"></label>
+            <button onclick="resetViewport()">Latest</button>
+            <button id="expandChart" onclick="toggleChart()">Expand chart</button>
           </div>
+          <div id="indicatorChips" class="toolbar" aria-label="Visible indicators"></div>
+          <p id="chartStatus" class="notice" role="status">Loading chart history…</p>
           <div id="ohlc" class="notice"></div>
           <div id="studyLegend" class="notice" style="min-height: 42px"></div>
           <canvas id="chart"></canvas>
@@ -446,47 +483,13 @@
             quote, including gaps. Liquidity and partial fills are not modelled.
           </div>
         </div>
-        <div class="panel">
-          <h2>Plan your trade <span class="pill">LONG</span></h2>
-          <label>Order type</label
-          ><select id="type">
-            <option value="market">Market</option>
-            <option value="limit">Limit buy</option>
-            <option value="stop">Stop buy</option>
-          </select>
-          <div class="fields">
-            <div>
-              <label for="entry">Entry ₹</label
-              ><input id="entry" type="number" step="0.05" />
-            </div>
-            <div>
-              <label for="qty">Quantity</label
-              ><input id="qty" type="number" value="10" min="1" step="1" />
-            </div>
-            <div>
-              <label for="stop">Stop ₹</label
-              ><input id="stop" type="number" step="0.05" />
-            </div>
-            <div>
-              <label for="target">Target ₹</label
-              ><input id="target" type="number" step="0.05" />
-            </div>
-          </div>
-          <button onclick="defaultStop()">Set 3% stop</button>
-          <p id="risk" class="notice"></p>
-          <button class="buy" id="place">Place paper order</button
-          ><button
-            id="cancelEdit"
-            hidden
-            onclick="cancelEdit()"
-            style="margin-top: 10px"
-          >
-            Cancel level edit
-          </button>
+        <div class="panel trade-plan">
+          <h2>Trade plan</h2>
+          <div id="planSummary" class="notice">Select a stock to plan your entry.</div>
+          <button class="buy" onclick="openTicket()">Buy · Paper order</button>
+          <p class="notice">Draw entry, stop and target on the chart, then review your order.</p>
+          <p class="notice">Cash intraday · Long positions<br>Sell using Exit on an open position.</p>
           <div id="toast" role="status"></div>
-          <div class="notice">
-            No real orders. Full cash funding; no leverage.
-          </div>
         </div>
       </div>
       <div class="panel section">
@@ -578,6 +581,35 @@
       </div>
     </main>
   </div>
+  <dialog id="orderTicket" aria-labelledby="ticketSymbol">
+    <div class="ticket-header"><div><h2 id="ticketSymbol">Buy</h2><span id="ticketQuote"></span></div><span class="paper-tag">Paper order</span></div>
+    <div class="ticket-body">
+      <div class="ticket-tabs"><span class="selected">Regular</span><span>Intraday · MIS</span><span>Day validity</span></div>
+      <p class="notice">Full cash funding · No leverage</p>
+      <div class="fields">
+        <div><label for="qty">Quantity</label><input id="qty" type="number" value="10" min="1" step="1"></div>
+        <div><label for="entry" id="priceLabel">Price ₹</label><input id="entry" type="number" min="0.05" step="0.05"><small id="priceHelp" class="notice"></small></div>
+      </div>
+      <label for="type">Order type</label>
+      <select id="type"><option value="market">Market</option><option value="limit">Limit</option><option value="stop">SL-M · Stop market</option></select>
+      <div class="order-types" role="group" aria-label="Order type shortcuts">
+        <button data-order="market" onclick="setOrderType('market')">Market</button>
+        <button data-order="limit" onclick="setOrderType('limit')">Limit</button>
+        <button data-order="stop" onclick="setOrderType('stop')">SL-M</button>
+      </div>
+      <h3>Exit protection</h3>
+      <div class="fields">
+        <div><label for="stop">Stop-loss ₹</label><input id="stop" type="number" min="0.05" step="0.05"></div>
+        <div><label for="target">Target ₹</label><input id="target" type="number" min="0.05" step="0.05"></div>
+      </div>
+      <button onclick="defaultStop()">Set 3% stop</button>
+      <p id="risk" class="notice"></p>
+      <p id="ticketFunds" class="notice"></p>
+      <p id="ticketMessage" role="status" class="notice"></p>
+      <p class="notice">Simulated orders only. Stops and targets fill at the next observed quote; gaps can change the fill.</p>
+    </div>
+    <div class="ticket-footer"><button onclick="document.getElementById('orderTicket').close()">Close</button><button id="cancelEdit" hidden onclick="cancelEdit()">Cancel level edit</button><button class="buy" id="place">Buy · Paper order</button></div>
+  </dialog>
   <dialog id="settings">
     <h2>Practice settings</h2>
     <label>Starting paper capital ₹</label

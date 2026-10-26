@@ -116,6 +116,7 @@ function saveStudies(reset = false) {
     );
   } catch {}
   document.getElementById("studies").close();
+  renderStudyChips();
   draw();
 }
 function draw() {
@@ -137,6 +138,11 @@ function draw() {
     ctx.fillText("Waiting for timeframe candles…", 20, 30);
     document.getElementById("studyLegend").textContent =
       "Indicators appear when candle history loads.";
+    document.getElementById("ohlc").textContent = "";
+    for (const k of panels) {
+      const el = document.getElementById(k+"Chart");
+      el.getContext("2d").clearRect(0,0,el.width,el.height);
+    }
     for (const k of panels)
       document.getElementById(k + "Value").textContent = "Waiting for history";
     return;
@@ -144,12 +150,14 @@ function draw() {
   const I = PaperIndicators,
     results = I.calculate(all, studyConfig),
     count = +document.getElementById("barCount").value,
-    start = Math.max(0, all.length - count),
-    cs = all.slice(start),
+    end = Math.max(1, all.length - Math.min(viewOffset, Math.max(0, all.length-count))),
+    start = Math.max(0, end - count),
+    cs = all.slice(start,end),
     cw = (w - 75) / cs.length;
-  const cut = (s) => s.slice(start),
+  const cut = (s) => s.slice(start,end),
     last = (s) => {
-      const v = s.at(-1);
+      const index = crosshair ? start+Math.max(0,Math.min(cs.length-1,Math.floor(crosshair.x/cw))) : end-1;
+      const v = s[index];
       return I.valid(v) ? v.toFixed(2) : "warming up";
     },
     labels = {
@@ -274,9 +282,16 @@ function draw() {
     ctx.setLineDash([]);
     ctx.fillText(id.toUpperCase() + " " + p.toFixed(2), 8, y(p) - 6);
   }
-  const c = cs.at(-1);
+  const hoverIndex = crosshair ? Math.max(0,Math.min(cs.length-1,Math.floor(crosshair.x/cw))) : cs.length-1;
+  const c = cs[hoverIndex];
+  if (crosshair && crosshair.x < w-65) {
+    ctx.strokeStyle = "#71849c";
+    ctx.setLineDash([3,3]);
+    ctx.beginPath(); ctx.moveTo(x(hoverIndex),0); ctx.lineTo(x(hoverIndex),h-25);
+    ctx.moveTo(0,crosshair.y); ctx.lineTo(w-65,crosshair.y); ctx.stroke(); ctx.setLineDash([]);
+  }
   document.getElementById("ohlc").textContent =
-    `O ${c.o.toFixed(2)}  H ${c.h.toFixed(2)}  L ${c.l.toFixed(2)}  C ${c.c.toFixed(2)} · ${all.length} candles loaded`;
+    `O ${c.o.toFixed(2)}  H ${c.h.toFixed(2)}  L ${c.l.toFixed(2)}  C ${c.c.toFixed(2)} · ${new Date(c.time*1000).toLocaleString("en-IN", {timeZone:"Asia/Kolkata"})} IST · ${all.length} candles loaded`;
   document.getElementById("studyLegend").innerHTML = Object.keys(labels)
     .filter((k) => studyVisible[k])
     .map(
@@ -361,4 +376,20 @@ function draw() {
     document.getElementById("adxValue").textContent =
       `ADX smoothing ${studyConfig.adxSmooth} / DI ${studyConfig.diLength}: ${last(results.adx)}`;
   }
+}
+
+function renderStudyChips() {
+  const labels = {ma21:"SMA 21",ma65:"SMA 65",ema5:"EMA 5",ema9:"EMA 9",ema10:"EMA 10",bb:"BB",st:"SuperTrend",volume:"Volume",rsi:"RSI",macd:"MACD",adx:"ADX"};
+  for (const k of ["ma21","ma65","ema5","ema9","ema10"]) labels[k] = (k.startsWith("ema") ? "EMA " : "SMA ")+studyConfig[k];
+  document.getElementById("indicatorChips").innerHTML = Object.entries(labels).map(([k,label]) => `<button style="color:${studyColors[k]}" aria-pressed="${studyVisible[k]}" onclick="toggleStudy('${k}')">${label}</button>`).join("");
+}
+function persistStudies() {
+  try { localStorage.setItem("paperkite-studies-v1",JSON.stringify({config:studyConfig,visible:studyVisible})); } catch {}
+  renderStudyChips(); draw();
+}
+function toggleStudy(key) { studyVisible[key] = !studyVisible[key]; persistStudies(); }
+function applyPreset() {
+  studyConfig = {...studyDefaults};
+  for (const key of Object.keys(studyVisible)) studyVisible[key] = true;
+  persistStudies();
 }
