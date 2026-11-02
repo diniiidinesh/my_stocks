@@ -311,3 +311,15 @@ def test_startup_http_error_does_not_expose_bot_token(bot,monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         controller.start()
     assert 'PRIVATE_TOKEN' not in str(exc.value)
+
+
+def test_offer_text_html_makes_commands_tap_to_copy():
+    from nse_alert.paper_offers import offer_text
+    offer = dict(id='PC9EA769286', symbol='M&M', quantity=None, budget=20000, stop_pct=3,
+                 target_pct=6, expires='2026-11-02T09:57:00+00:00')
+    html = offer_text(offer, html_mode=True)
+    assert '<code>/confirm PC9EA769286</code>' in html
+    assert '<code>/cancel PC9EA769286</code>' in html
+    assert 'BUY M&amp;M' in html
+    plain = offer_text(offer)
+    assert '/confirm PC9EA769286' in plain and '<code>' not in plain and 'M&M' in plain

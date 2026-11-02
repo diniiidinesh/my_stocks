@@ -402,7 +402,7 @@ def watch_cmd(
                 reason=f"+{alert.threshold_pct:g}% alert", source=f"threshold:{alert.symbol}:{alert.threshold_pct}:{alert.fired_at.isoformat()}",
                 settings=settings, now=datetime.now(timezone.utc))
             if tg:
-                tg.send_text(offer_text(offer))
+                tg.send_text(offer_text(offer, html_mode=True), parse_mode="HTML")
             else:
                 click.echo(offer_text(offer))
             return
