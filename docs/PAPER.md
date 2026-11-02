@@ -10,6 +10,21 @@ The existing daily Kite login/token workflow is **unchanged**. Paperkite reads t
 same `.env` and universe settings. Its startup validates the token. After the daily
 login, recreate the paper container too so it receives the new token.
 
+## Which mode am I in?
+
+`TRADE_MODE` in the shared `.env` decides what the watcher does with alerts and
+whether Telegram reaches Paperkite:
+
+| `TRADE_MODE` | Watcher on +11/+13% and signal alerts | Paperkite |
+|---|---|---|
+| `auto` / `confirm` | **Real** Kite orders (auto, or after `/confirm`) | Optional, **browser-only** desk. No Telegram paper offers. |
+| `paper` | Sends **PAPER ORDER P…** offers; never places real orders | **Must be running**: it is the only listener for `/confirm P…` and `/cancel P…` |
+| `off` / `dry_run` | Alerts only / logged hypothetical orders | Optional, browser-only |
+
+So: if you don't run Paperkite, keep `TRADE_MODE` off `paper`. In paper mode
+without Paperkite, `/confirm P…` messages go unanswered and nothing is recorded.
+Running Paperkite in `auto` mode is fine; it simply won't receive Telegram offers.
+
 ## Test locally without credentials
 
 ```sh
@@ -56,6 +71,33 @@ Daily login, then:
 
 ```sh
 docker compose --profile paper up -d --force-recreate paper
+```
+
+Start or recreate it **only after** the daily login. With yesterday's token the
+startup check fails (`Kite login validation failed`), and the container's
+`on-failure` restart policy keeps retrying it with the same bad token.
+
+### Stopping it / not using it
+
+```sh
+docker compose --profile paper stop paper      # stays stopped; a manual stop is not a "failure"
+docker compose --profile paper rm -f paper     # optional: remove the container entirely
+```
+
+Removing the container keeps the ledger (`STATE_DIR/paper-live/`). Bring it back
+later with the `up -d --build` command above. If you don't use Paperkite, also keep
+`TRADE_MODE` off `paper` (see [Which mode am I in?](#which-mode-am-i-in)).
+
+### Paperkite in its own checkout
+
+If Paperkite runs from a second clone (for example `/home/ubuntu/paperkite`, with
+its `.env` symlinked to the watcher's), pulling the watcher's folder does **not**
+update it. Update it separately before rebuilding:
+
+```sh
+cd /home/ubuntu/paperkite
+git fetch origin main && git checkout --detach FETCH_HEAD
+docker compose --profile paper up -d --build paper
 ```
 
 Keep your existing watcher refresh procedure too. A stale token never falls back
@@ -190,6 +232,11 @@ P-prefixed **PAPER** offers; the Paperkite service receives their `/confirm` and
 Telegram orders share costs, cash, quote freshness, protections and the profit
 streak. There is no additional market-data connection for Telegram, only a
 long-polling thread.
+
+In each offer, `/confirm P…` and `/cancel P…` appear in monospace: **tap one to copy
+the whole command**, including the ID, then paste and send it. (Before this fix,
++11/+13% offers were plain text, so tapping the blue `/confirm` link sent the
+command without its ID.)
 
 The configured Telegram group access policy is retained. Optional numeric sender
 restrictions are available. The browser connection line shows Telegram status.

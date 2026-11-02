@@ -325,6 +325,10 @@ use `TRADE_ON_THRESHOLDS`; volume and 52-week alerts offer **PAPER BUY** only if
 signal offers are enabled. Short selling is not supported by this cash-paper desk.
 The watcher never starts its real-order confirmation listener in paper mode.
 The Paperkite service is the single Telegram input consumer and must be running.
+Without it, paper `/confirm` messages get no reply and nothing is recorded. If you
+don't run Paperkite, use `auto`/`confirm` instead (see
+[Which mode am I in?](PAPER.md#which-mode-am-i-in)). Offer commands are sent in
+monospace, so tapping one copies the full `/confirm P…` line, ID included.
 
 At confirmation, Paperkite checks the offer TTL, current session, 15-second quote
 freshness, capital and daily loss cap. With `TRADE_SIZING=fixed`, it uses

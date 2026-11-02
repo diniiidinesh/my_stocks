@@ -1,6 +1,7 @@
 """Cross-process, paper-only alert offers shared by watch and Paperkite."""
 from __future__ import annotations
 
+import html
 import json
 import sqlite3
 import uuid
@@ -48,11 +49,14 @@ class PaperOffers:
         return [o for row in rows if datetime.fromisoformat((o:=json.loads(row[0]))['expires'])>now]
 
 
-def offer_text(o):
+def offer_text(o, *, html_mode=False):
+    """Offer message; ``html_mode`` wraps commands in <code> so Telegram copies them on tap."""
+    esc = html.escape if html_mode else str
+    cmd = (lambda c: f"<code>{c}</code>") if html_mode else str
     sizing = f"qty={o['quantity']}" if o['quantity'] is not None else f"cash budget ₹{o['budget']:,.0f} (no leverage)"
-    return (f"PAPER ORDER {o['id']}\nBUY {o['symbol']} | {sizing}\n"
+    return (f"PAPER ORDER {o['id']}\nBUY {esc(o['symbol'])} | {sizing}\n"
             f"Stop {o['stop_pct']:g}% below fill | Target {o['target_pct']:g}% above fill\n"
             f"Current price/quantity/levels are checked when confirmed.\n"
-            f"/confirm {o['id']}\n/cancel {o['id']}\n"
+            f"{cmd('/confirm ' + o['id'])}\n{cmd('/cancel ' + o['id'])}\n"
             f"Expires {datetime.fromisoformat(o['expires']).astimezone(ZoneInfo('Asia/Kolkata')).strftime('%H:%M IST')}\n"
             'Simulated only — visible in Paperkite, no broker order.')
