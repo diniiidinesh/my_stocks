@@ -21,6 +21,9 @@ Optional. Alerts work with `TRADE_MODE=off`.
 | `TRADE_STOP_WAIT_SEC` | `20` | Wait for entry fill before SL (live) |
 | `TRADE_TRAIL_BREAKEVEN` | `true` | Move SL to entry when LTP rises enough |
 | `TRADE_TRAIL_BREAKEVEN_PCT` | `2` | Arm cost-to-cost trail at entry × 1.02 |
+| `TRAIL_EMA` | `true` | Trail long stops under the 15-minute EMA (live and paper) |
+| `TRAIL_EMA_PERIOD` | `5` | EMA period, on completed 15-minute candles |
+| `TRAIL_EMA_BUFFER_PCT` | `0.3` | Stop sits this % below the EMA |
 | `TRADE_EXIT_ON_UPPER_CIRCUIT` | `true` | Exit at market when LTP hits the upper-circuit band |
 | `TRADE_UPPER_CIRCUIT_PCT` | `20` | Circuit band (% of prev close) that triggers the exit |
 | `TRADE_MAX_ORDERS_PER_DAY` | `10` | Entry-order cap (stops excluded) |
@@ -36,7 +39,8 @@ Optional. Alerts work with `TRADE_MODE=off`.
 5. Place **SL-Limit SELL** (trigger 2% under fill, limit a few ticks lower)
 6. Look up the symbol's **actual** upper-circuit price via Kite `quote()` and store it on the position (falls back to `TRADE_UPPER_CIRCUIT_PCT` of prev close if unavailable)
 7. On each tick: if LTP ≥ entry × (1 + `TRADE_TRAIL_BREAKEVEN_PCT`/100), **modify** stop to entry (cost-to-cost)
-8. On each tick: if LTP reaches the circuit price from step 6, cancel the resting stop and **exit at market** immediately
+8. After each 15-minute candle closes (about 20 s later, so Kite's bar is final): fetch 15m candles, compute the `TRAIL_EMA_PERIOD` EMA of **completed** candles, and if EMA × (1 − `TRAIL_EMA_BUFFER_PCT`/100) is above the current stop, **modify** the stop up to it. Clamped one tick under LTP; never moves down. Until the EMA level clears the initial % stop, the % stop stays. Long only.
+9. On each tick: if LTP reaches the circuit price from step 6, cancel the resting stop and **exit at market** immediately
 
 No new entry is placed or confirmed after the stock's MIS cutoff (15:12 for F&O stocks and 15:25 for the rest, since the Aug 2026 closing auction; see [ALERTS.md](ALERTS.md#market-close-cas-since-3-aug-2026)). You get a `⏰ … trade skipped` message instead. Stop orders do **not** consume `TRADE_MAX_ORDERS_PER_DAY`. One open position per symbol/day.
 

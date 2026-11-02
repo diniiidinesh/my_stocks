@@ -186,6 +186,7 @@ def watch_cmd(
         raise click.ClickException("Universe is empty after filters")
 
     prev_closes = {i.symbol: i.prev_close for i in instruments}
+    tokens = {i.symbol: i.instrument_token for i in instruments}
     state_path = settings.state_dir / "fired.json"
     # Fresh mock runs should not be blocked by a prior DEMO13 fire today.
     if not use_kite and state_path.exists():
@@ -547,11 +548,14 @@ def watch_cmd(
 
     def on_tick(symbol: str, ltp: float, volume: int | None = None) -> None:
         last_ltp[symbol] = ltp
-        trail_msg = executor.manage_open_stops(symbol, ltp)
-        if trail_msg:
-            logger.info("%s", trail_msg)
-            if tg:
-                tg.send_text(trail_msg)
+        for trail_msg in (
+            executor.manage_open_stops(symbol, ltp),
+            executor.manage_ema_trail(symbol, ltp, tokens.get(symbol)),
+        ):
+            if trail_msg:
+                logger.info("%s", trail_msg)
+                if tg:
+                    tg.send_text(trail_msg)
         prev_close = engine.prev_closes.get(symbol)
         if prev_close:
             circuit_msg = executor.manage_upper_circuit_exit(symbol, ltp, prev_close)
@@ -767,6 +771,9 @@ def _build_executor(settings: Settings, book: OrderBook) -> OrderExecutor:
         stop_wait_sec=settings.trade_stop_wait_sec,
         trail_breakeven=settings.trade_trail_breakeven,
         trail_breakeven_pct=settings.trade_trail_breakeven_pct,
+        trail_ema=settings.trail_ema,
+        trail_ema_period=settings.trail_ema_period,
+        trail_ema_buffer_pct=settings.trail_ema_buffer_pct,
         exit_on_upper_circuit=settings.trade_exit_on_upper_circuit,
         upper_circuit_pct=settings.trade_upper_circuit_pct,
         sizing_mode=settings.trade_sizing,

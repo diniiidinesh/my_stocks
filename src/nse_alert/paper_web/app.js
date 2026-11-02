@@ -114,7 +114,7 @@ function render() {
       .filter((o) => ["open", "pending"].includes(o.status))
       .map((o) => {
         const q = assets.find((x) => x.symbol === o.symbol);
-        return `<tr><td>${esc(o.symbol)}</td><td>${o.exit_due ? "Exit waiting for fresh quote" : o.status}</td><td>${o.qty}</td><td>${money(o.fill || o.entry)}</td><td>${money(o.stop)} / ${money(o.target)}</td><td>${o.status === "open" && q ? money((q.price - o.fill) * o.qty) : "—"}</td><td><button onclick="act('${o.id}')">${o.status === "open" ? "Exit" : "Cancel"}</button>${o.status === "open" ? ` <button onclick="editProtection('${o.id}')">Edit levels</button>` : ""}</td></tr>`;
+        return `<tr><td>${esc(o.symbol)}</td><td>${o.exit_due ? "Exit waiting for fresh quote" : o.status}</td><td>${o.qty}</td><td>${money(o.fill || o.entry)}</td><td>${money(o.stop)}${o.trail ? ` <small title="${esc(o.trail)}">trailing</small>` : ""} / ${money(o.target)}</td><td>${o.status === "open" && q ? money((q.price - o.fill) * o.qty) : "—"}</td><td><button onclick="act('${o.id}')">${o.status === "open" ? "Exit" : "Cancel"}</button>${o.status === "open" ? ` <button onclick="editProtection('${o.id}')">Edit levels</button>` : ""}</td></tr>`;
       })
       .join("") ||
     '<tr><td colspan="7" class="empty">Plan your next paper trade on the chart.</td></tr>';

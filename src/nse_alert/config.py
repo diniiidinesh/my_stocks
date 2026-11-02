@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     # When LTP rises this % above entry, move SL trigger to entry (cost-to-cost)
     trade_trail_breakeven: bool = Field(default=True, alias="TRADE_TRAIL_BREAKEVEN")
     trade_trail_breakeven_pct: float = Field(default=2.0, alias="TRADE_TRAIL_BREAKEVEN_PCT")
+    # Ratchet long stops (live auto-orders and paper) to N % below the EMA of
+    # completed 15-minute candles, once per candle close; never moves down.
+    trail_ema: bool = Field(default=True, alias="TRAIL_EMA")
+    trail_ema_period: int = Field(default=5, ge=1, alias="TRAIL_EMA_PERIOD")
+    trail_ema_buffer_pct: float = Field(default=0.3, ge=0, lt=100, alias="TRAIL_EMA_BUFFER_PCT")
     trade_confirm_ttl_minutes: int = Field(default=30, alias="TRADE_CONFIRM_TTL_MINUTES")
     # Exit at market the moment LTP reaches the upper-circuit band from prev
     # close — most NSE mid/small caps circuit at +20%, well above the 11/13%

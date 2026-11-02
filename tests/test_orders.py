@@ -691,6 +691,124 @@ def test_tc_trail_breakeven_modifies_stop(tmp_path: Path, monkeypatch: pytest.Mo
     assert ex.manage_open_stops("TATASTEEL", 105.0) is None
 
 
+class _CandleKite(_FakeKite):
+    """Serves 15m candles from 09:15 IST; the last close is the forming candle."""
+
+    def __init__(self, closes: list[float], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.closes = closes
+        self.history_calls: list[str] = []
+
+    def historical_data(self, token: int, start: Any, end: Any, interval: str) -> list[dict[str, Any]]:
+        from nse_alert.ema_trail import IST
+
+        self.history_calls.append(interval)
+        first = datetime(2026, 11, 2, 9, 15, tzinfo=IST)
+        return [
+            {"date": first + timedelta(minutes=15 * i), "close": c}
+            for i, c in enumerate(self.closes)
+        ]
+
+
+def _ema_executor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake: _FakeKite, **kwargs: Any) -> OrderExecutor:
+    ex = _executor(
+        tmp_path,
+        mode="auto",
+        api_key="k",
+        access_token="t",
+        stop_wait_sec=1.0,
+        trail_ema=True,
+        trail_ema_period=5,
+        trail_ema_buffer_pct=0.3,
+        **kwargs,
+    )
+    monkeypatch.setattr(ex, "_kite", lambda: fake)
+    return ex
+
+
+def test_ema_trail_ratchets_once_per_closed_15m_candle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nse_alert.ema_trail import IST
+
+    # Seven closed candles at 100 + forming candle at 50 (must be ignored).
+    fake = _CandleKite([100.0] * 7 + [50.0], fill_price=100.0)
+    ex = _ema_executor(tmp_path, monkeypatch, fake, trail_breakeven=False)
+    entry, sl = ex.place_entry_with_stop(_buy_req("TATASTEEL"), entry_ltp=100.0)
+    assert entry.ok and sl is not None and sl.ok
+    assert ex.book is not None and ex.book.get_position("TATASTEEL")["stop_price"] == 98.0
+
+    now = datetime(2026, 11, 2, 11, 0, 30, tzinfo=IST)
+    msg = ex.manage_ema_trail("TATASTEEL", 101.0, 123, now=now)
+    assert msg is not None and "EMA5" in msg
+    assert fake.history_calls == ["15minute"]
+    assert fake.modifies[-1]["trigger_price"] == 99.7
+    assert fake.modifies[-1]["price"] == 99.6
+    assert ex.book.get_position("TATASTEEL")["stop_price"] == 99.7
+
+    # Same candle: no second fetch.
+    assert ex.manage_ema_trail("TATASTEEL", 101.0, 123, now=now + timedelta(minutes=5)) is None
+    assert fake.history_calls == ["15minute"]
+
+    # Next candle with a lower EMA: stop never moves down.
+    fake.closes = [100.0] * 7 + [90.0, 90.0]
+    assert ex.manage_ema_trail("TATASTEEL", 101.0, 123, now=now + timedelta(minutes=15)) is None
+    assert len(fake.history_calls) == 2
+    assert ex.book.get_position("TATASTEEL")["stop_price"] == 99.7
+
+
+def test_ema_trail_keeps_initial_stop_until_ema_clears_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nse_alert.ema_trail import IST
+
+    fake = _CandleKite([97.0] * 8, fill_price=100.0)
+    ex = _ema_executor(tmp_path, monkeypatch, fake)
+    ex.place_entry_with_stop(_buy_req("SBIN"), entry_ltp=100.0)
+    modifies = len(fake.modifies)
+    now = datetime(2026, 11, 2, 11, 0, 30, tzinfo=IST)
+    assert ex.manage_ema_trail("SBIN", 99.0, 1, now=now) is None
+    assert len(fake.modifies) == modifies
+    assert ex.book is not None and ex.book.get_position("SBIN")["stop_price"] == 98.0
+
+
+def test_ema_trail_clamps_under_ltp_and_breakeven_never_lowers_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nse_alert.ema_trail import IST
+
+    fake = _CandleKite([110.0] * 8, fill_price=100.0)
+    ex = _ema_executor(tmp_path, monkeypatch, fake, trail_breakeven=True, trail_breakeven_pct=2.0)
+    ex.place_entry_with_stop(_buy_req("INFY"), entry_ltp=100.0)
+    now = datetime(2026, 11, 2, 11, 0, 30, tzinfo=IST)
+    # EMA−buffer (109.65) is above LTP 105: Kite needs the SELL trigger under LTP.
+    assert ex.manage_ema_trail("INFY", 105.0, 1, now=now) is not None
+    assert fake.modifies[-1]["trigger_price"] == 104.95
+    modifies = len(fake.modifies)
+    assert ex.manage_open_stops("INFY", 105.0) is None
+    assert len(fake.modifies) == modifies
+    assert ex.book is not None and ex.book.get_position("INFY")["stop_price"] == 104.95
+
+
+def test_ema_trail_skips_shorts_paper_and_missing_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nse_alert.ema_trail import IST
+
+    fake = _CandleKite([110.0] * 8, fill_price=100.0)
+    ex = _ema_executor(tmp_path, monkeypatch, fake)
+    assert ex.book is not None
+    ex.book.record_position(
+        symbol="SHORTY", quantity=1, entry_price=100.0, stop_price=102.0,
+        stop_limit_price=102.1, entry_order_id="E", stop_order_id="S", mode="auto", side="SELL",
+    )
+    now = datetime(2026, 11, 2, 11, 0, 30, tzinfo=IST)
+    assert ex.manage_ema_trail("SHORTY", 105.0, 1, now=now) is None
+    ex.place_entry_with_stop(_buy_req("ITC"), entry_ltp=100.0)
+    assert ex.manage_ema_trail("ITC", 105.0, None, now=now) is None
+    assert fake.history_calls == []
+
+
 def test_tc_trail_breakeven_dry_run(tmp_path: Path) -> None:
     ex = _executor(tmp_path, trail_breakeven=True, trail_breakeven_pct=2.0)
     req = _buy_req("SBIN")

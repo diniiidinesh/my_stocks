@@ -267,6 +267,20 @@ class PaperBook:
             o.update(stop=stop, target=target)
             self._save()
 
+    def trail_stop(self, symbol, stop, note):
+        """Raise open stops on ``symbol`` to ``stop`` (kept under the quote); never lowers them."""
+        with self.lock:
+            if symbol not in self.market or not self._fresh(symbol):
+                return []
+            stop = min(stop, rounded(self.market[symbol]['price'] - .05))
+            moved = []
+            for o in self.data['orders']:
+                if o['symbol'] == symbol and o['status'] == 'open' and stop > o['stop']:
+                    moved.append(f"{symbol}: paper stop {o['stop']:.2f} -> {stop:.2f} ({note})")
+                    o.update(stop=stop, trail=note)
+            self._save()
+            return moved
+
     def action(self, ident):
         with self.lock:
             o = next((o for o in self.data['orders'] if o['id'] == ident), None)

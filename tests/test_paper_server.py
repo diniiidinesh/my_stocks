@@ -104,6 +104,41 @@ def test_native_timeframes_include_volume_and_use_separate_cache(server):
         server.candles('AAA', 'unsupported')
 
 
+def test_ema_trail_raises_paper_stop_once_per_closed_candle(server, desk):
+    from datetime import datetime, timedelta
+    from nse_alert.paper import IST
+    book, clock, _ = desk
+    calls = []
+    class FakeKite:
+        def historical_data(self, token, start, end, interval):
+            calls.append(interval)
+            first = datetime(2026, 10, 19, 9, 15, tzinfo=IST)
+            # Seven closed candles at 104, then the forming 11:00 candle at 50.
+            return [dict(date=first + timedelta(minutes=15 * i), open=c, high=c, low=c, close=c, volume=1)
+                    for i, c in enumerate([104] * 7 + [50])]
+    server.kite = FakeKite()
+    server.trail_ema = (5, 0.3)
+    o = book.place(dict(symbol='AAA', qty=10, type='market', stop=97, target=110))
+    clock[0] = datetime(2026, 10, 19, 11, 0, 30, tzinfo=IST)
+    book.tick('AAA', 105)
+    server.trail_stops()
+    order = next(x for x in book.data['orders'] if x['id'] == o['id'])
+    assert order['stop'] == 103.7
+    assert 'EMA5' in order['trail']
+    assert calls == ['15minute']
+    server.trail_stops()
+    assert calls == ['15minute']
+    book.tick('AAA', 103.6)
+    assert order['status'] == 'closed' and order['reason'] == 'Stop loss'
+
+
+def test_ema_trail_off_by_default(server, desk):
+    book, clock, _ = desk
+    book.place(dict(symbol='AAA', qty=10, type='market', stop=97, target=110))
+    server.trail_stops()
+    assert book.data['orders'][0]['stop'] == 97
+
+
 def test_indicator_scripts_are_served(server):
     for path in ['/indicators.js', '/chart.js']:
         status, content = call(server, path)
