@@ -6,7 +6,7 @@ import secrets
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -385,6 +385,9 @@ class OrderExecutor:
         stop_wait_sec: float = 20.0,
         trail_breakeven: bool = True,
         trail_breakeven_pct: float = 2.0,
+        trail_ema: bool = False,
+        trail_ema_period: int = 5,
+        trail_ema_buffer_pct: float = 0.3,
         exit_on_upper_circuit: bool = True,
         upper_circuit_pct: float = 20.0,
         sizing_mode: str = "margin",  # margin | fixed
@@ -409,6 +412,12 @@ class OrderExecutor:
         self.stop_wait_sec = max(1.0, float(stop_wait_sec))
         self.trail_breakeven = trail_breakeven
         self.trail_breakeven_pct = abs(float(trail_breakeven_pct))
+        self.trail_ema = trail_ema
+        self.trail_ema_period = max(1, int(trail_ema_period))
+        self.trail_ema_buffer_pct = abs(float(trail_ema_buffer_pct))
+        # symbol -> last settled 15m candle evaluated / earliest retry after a fetch failure
+        self._ema_checked: dict[str, int] = {}
+        self._ema_retry_at: dict[str, float] = {}
         self.exit_on_upper_circuit = exit_on_upper_circuit
         self.upper_circuit_pct = abs(float(upper_circuit_pct))
         mode_raw = (sizing_mode or "margin").strip().lower()
@@ -733,6 +742,9 @@ class OrderExecutor:
             return None
         if ltp < entry * (1.0 + self.trail_breakeven_pct / 100.0):
             return None
+        # The EMA trail may already sit above cost; never pull the stop back down.
+        if float(pos.get("stop_price") or 0.0) >= entry:
+            return None
 
         trigger = self._clamp_sell_sl_trigger(round_tick(entry), ltp)
         limit_px = self.stop_limit_price_from_trigger(trigger)
@@ -756,6 +768,72 @@ class OrderExecutor:
             logger.info(msg)
             return msg
         return None
+
+    def manage_ema_trail(
+        self,
+        symbol: str,
+        ltp: float,
+        instrument_token: int | None,
+        *,
+        now: datetime | None = None,
+    ) -> str | None:
+        """Ratchet a long stop to just under the EMA of completed 15m candles.
+
+        Runs at most once per closed 15-minute candle per symbol (a few
+        seconds after the close, so Kite's bar is final). The stop only ever
+        moves up; until EMA − buffer clears the initial % stop it stays put.
+        """
+        from nse_alert import ema_trail
+
+        if self.mode == "paper" or not self.book or not self.trail_ema or not instrument_token:
+            return None
+        if not self.api_key or not self.access_token:
+            return None
+        pos = self.book.get_position(symbol)
+        if not pos or pos.get("side") == "SELL" or not pos.get("stop_order_id") or ltp <= 0:
+            return None
+        now = now or datetime.now(ema_trail.IST)
+        key = ema_trail.closed_bucket_key(now)
+        if self._ema_checked.get(symbol) == key or now.timestamp() < self._ema_retry_at.get(symbol, 0.0):
+            return None
+        try:
+            rows = self._kite().historical_data(
+                instrument_token,
+                now - timedelta(days=ema_trail.LOOKBACK_DAYS),
+                now,
+                ema_trail.INTERVAL,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("15m candles unavailable for %s EMA trail: %s", symbol, exc)
+            self._ema_retry_at[symbol] = now.timestamp() + 60
+            return None
+        self._ema_checked[symbol] = key
+        stop = ema_trail.ema_stop(
+            ema_trail.closed_closes(rows or [], now),
+            period=self.trail_ema_period,
+            buffer_pct=self.trail_ema_buffer_pct,
+        )
+        current = float(pos.get("stop_price") or 0.0)
+        if stop is None or stop <= current:
+            return None
+        trigger = self._clamp_sell_sl_trigger(stop, ltp)
+        if trigger <= current:
+            return None
+        limit_px = self.stop_limit_price_from_trigger(trigger)
+        if not self._modify_stop_order(
+            stop_order_id=str(pos["stop_order_id"]),
+            quantity=int(pos.get("quantity") or 1),
+            trigger=trigger,
+            limit_px=limit_px,
+        ):
+            return None
+        self.book.update_stop(symbol, stop_price=trigger, stop_limit_price=limit_px)
+        msg = (
+            f"Trailed SL on {symbol} under 15m EMA{self.trail_ema_period}: "
+            f"trigger={trigger:.2f} limit={limit_px:.2f} (was {current:.2f}, LTP={ltp:.2f})"
+        )
+        logger.info(msg)
+        return msg
 
     def fetch_upper_circuit_limit(self, symbol: str) -> float | None:
         """Look up today's actual upper-circuit price for a symbol via Kite.

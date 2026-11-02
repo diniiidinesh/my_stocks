@@ -72,7 +72,10 @@ Every fill checks cash, the session gate, and the stop/target bounds.
 Drawings persist per stock. They plan a new order; they do not change existing
 positions until you choose **Edit levels** and **Update paper position levels**.
 Protection can be trailed above entry to protect profit, provided the stop remains
-below the current quote. The entry fill and quantity remain unchanged.
+below the current quote. With `TRAIL_EMA=true` (default) the desk also does this
+automatically: after each 15-minute candle closes, open stops ratchet up to
+`TRAIL_EMA_BUFFER_PCT` (0.3%) under the `TRAIL_EMA_PERIOD` (5) EMA of completed
+15-minute candles. They never move down, and the position table marks them **trailing**. The entry fill and quantity remain unchanged.
 
 Historical charts request native Kite candles for the selected timeframe, cached
 for 60 seconds per stock/timeframe and merged with live updates. The UI refreshes

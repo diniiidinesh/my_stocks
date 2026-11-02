@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import click
 
+from nse_alert import ema_trail
 from nse_alert.paper import IST, PaperBook
 
 logger = logging.getLogger(__name__)
@@ -22,15 +23,18 @@ WEB = Path(__file__).with_name('paper_web')
 class PaperServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, book, kite=None):
+    def __init__(self, address, book, kite=None, *, trail_ema=None):
         super().__init__(address, PaperHandler)
         self.book, self.kite = book, kite
+        # (period, buffer %) for the 15m EMA trailing stop, or None when off.
+        self.trail_ema = trail_ema
+        self.last_trail_key = None
         self.csrf = secrets.token_urlsafe(32)
         self.history_lock = threading.Lock()
         self.history: dict[tuple[str, str], tuple[float, list]] = {}
         self.last_history_request = 0.0
 
-    def candles(self, symbol, interval='minute'):
+    def candles(self, symbol, interval='minute', *, fresh=False):
         periods = {'minute': (5, 60), '5minute': (20, 300), '15minute': (45, 900),
                    '60minute': (120, 3600), 'day': (500, 86400)}
         if symbol not in self.book.market or interval not in periods:
@@ -41,7 +45,7 @@ class PaperServer(ThreadingHTTPServer):
         if self.kite:
             with self.history_lock:
                 cached = self.history.get(key)
-                if not cached or clock.monotonic() - cached[0] > 60:
+                if fresh or not cached or clock.monotonic() - cached[0] > 60:
                     now = datetime.now(IST)
                     try:
                         clock.sleep(max(0, .5 - (clock.monotonic() - self.last_history_request)))
@@ -90,6 +94,30 @@ class PaperServer(ThreadingHTTPServer):
                 else:
                     merged[bucket] = dict(c, v=None)
         return [merged[k] for k in sorted(merged)][-700:]
+
+    def trail_stops(self):
+        """Once per closed 15m candle, ratchet open paper stops under the EMA."""
+        if not self.trail_ema:
+            return
+        now = self.book.now()
+        key = ema_trail.closed_bucket_key(now)
+        if key == self.last_trail_key:
+            return
+        self.last_trail_key = key
+        period, buffer_pct = self.trail_ema
+        with self.book.lock:
+            symbols = sorted({o['symbol'] for o in self.book.data['orders'] if o['status'] == 'open'})
+        for symbol in symbols:
+            try:
+                # Fresh fetch: a cached copy may still hold the just-closed candle half-formed.
+                closes = ema_trail.closed_closes(self.candles(symbol, ema_trail.INTERVAL, fresh=True), now)
+            except ValueError as exc:
+                logger.warning('EMA trail skipped for %s: %s', symbol, exc)
+                continue
+            stop = ema_trail.ema_stop(closes, period=period, buffer_pct=buffer_pct)
+            if stop is not None:
+                for msg in self.book.trail_stop(symbol, stop, f'15m EMA{period} -{buffer_pct:g}%'):
+                    logger.info('%s', msg)
 
 
 class PaperHandler(BaseHTTPRequestHandler):
@@ -222,7 +250,8 @@ def paper_cmd(feed, host, port):
             raise click.ClickException('Paper feed requires 1–3000 stocks; restrict CUSTOM_UNIVERSE_FILE')
         book = PaperBook(state_dir / 'ledger.sqlite3', instruments, live=live,
                          cutoff=hhmm_to_time(settings.squareoff_hhmm))
-        server = PaperServer((host, port), book, kite)
+        server = PaperServer((host, port), book, kite, trail_ema=(settings.trail_ema_period,
+            settings.trail_ema_buffer_pct) if settings.trail_ema else None)
         if settings.paper_trading:
             from nse_alert.paper_telegram import PaperTelegram
             if not settings.telegram_configured:
@@ -248,6 +277,7 @@ def paper_cmd(feed, host, port):
             while not stop.wait(1):
                 try:
                     book.housekeeping()
+                    server.trail_stops()
                 except Exception:
                     logger.exception('Paper session maintenance failed')
                     health('maintenance')

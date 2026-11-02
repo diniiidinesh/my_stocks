@@ -9,6 +9,7 @@ Realtime watcher for **NSE cash stocks** that move a configurable **±%** from t
 | ASM tag | Zerodha RMS sheet (not a Kite API) |
 | Test trades | BUY on **+13% UP** (MIS) + **2% SL-Limit**, margin-sized ≈ **₹10k** |
 | Cost-to-cost SL | Trail stop to entry after +2% from fill |
+| 15m EMA trailing SL | Ratchet stop to 0.3% under the 5-EMA of closed 15-minute candles |
 | Upper-circuit exit | Market SELL when LTP hits +20% of prev close |
 | Volume spike | Candle volume > 2.5× its 21-EMA on 5m/15m, and/or daily (`D`: today's volume so far vs daily EMA); EMA, market-cap and value floors → alert + `/confirm` BUY/SELL |
 | 52-week breakout | LTP above prior 52w high / below 52w low → pooled 15-min digest + `/confirm` BUY/SELL |
